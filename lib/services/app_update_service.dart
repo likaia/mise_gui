@@ -6,6 +6,7 @@ import 'package:mise_gui/models/app_models.dart';
 const _githubOwner = 'likaia';
 const _githubRepo = 'mise_gui';
 const _githubTagsPageUrl = 'https://github.com/likaia/mise_gui/tags';
+const _githubReleasesPageUrl = 'https://github.com/likaia/mise_gui/releases';
 const _githubApiBase =
     'https://api.github.com/repos/$_githubOwner/$_githubRepo';
 
@@ -59,7 +60,8 @@ class GitHubAppUpdateService implements AppUpdateService {
     }
 
     var releaseNotes = '发现新版本 $tagName，可前往 GitHub 查看更新详情。';
-    var releaseUrl = _githubTagsPageUrl;
+    var releaseUrl = '$_githubReleasesPageUrl/tag/$tagName';
+    final commitSha = _resolveTagCommitSha(latestTag);
 
     final releaseJson = await _getJsonMap(
       '$_githubApiBase/releases/tags/${Uri.encodeComponent(tagName)}',
@@ -73,6 +75,20 @@ class GitHubAppUpdateService implements AppUpdateService {
       }
       if (htmlUrl != null && htmlUrl.isNotEmpty) {
         releaseUrl = htmlUrl;
+      }
+    }
+
+    if (releaseNotes == '发现新版本 $tagName，可前往 GitHub 查看更新详情。' &&
+        commitSha != null) {
+      final commitJson = await _getJsonMap(
+        '$_githubApiBase/commits/$commitSha',
+        allowNotFound: true,
+      );
+      final commitMessage = commitJson?['commit'] is Map
+          ? (commitJson!['commit'] as Map)['message']?.toString().trim()
+          : null;
+      if (commitMessage != null && commitMessage.isNotEmpty) {
+        releaseNotes = commitMessage;
       }
     }
 
@@ -150,6 +166,17 @@ class GitHubAppUpdateService implements AppUpdateService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  String? _resolveTagCommitSha(Map<String, dynamic> latestTag) {
+    final commit = latestTag['commit'];
+    if (commit is Map) {
+      final sha = commit['sha']?.toString().trim();
+      if (sha != null && sha.isNotEmpty) {
+        return sha;
+      }
+    }
+    return null;
   }
 }
 

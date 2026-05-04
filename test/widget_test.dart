@@ -53,6 +53,23 @@ class _NoopAppUpdateService implements AppUpdateService {
   }
 }
 
+class _HasUpdateAppUpdateService implements AppUpdateService {
+  const _HasUpdateAppUpdateService();
+
+  @override
+  Future<AppUpdateInfo?> checkForUpdate({
+    required String currentVersion,
+  }) async {
+    return const AppUpdateInfo(
+      currentVersion: '1.0.0',
+      latestVersion: '1.0.1',
+      tagName: 'v1.0.1',
+      releaseNotes: '修复若干启动和安装问题',
+      releaseUrl: 'https://github.com/likaia/mise_gui/releases/tag/v1.0.1',
+    );
+  }
+}
+
 void main() {
   testWidgets('loads dashboard shell', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1600, 1200);
@@ -118,5 +135,38 @@ void main() {
 
     expect(find.text('这台电脑还没有安装 mise'), findsOneWidget);
     expect(find.text('brew install mise'), findsOneWidget);
+  });
+
+  testWidgets('shows update dialog when a newer release is available', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          appReleaseServiceProvider.overrideWithValue(
+            const _FakeAppReleaseService(),
+          ),
+          appUpdateServiceProvider.overrideWithValue(
+            const _HasUpdateAppUpdateService(),
+          ),
+          miseCliServiceProvider.overrideWithValue(const MockMiseCliService()),
+          historyServiceProvider.overrideWithValue(const MockHistoryService()),
+          projectScanServiceProvider.overrideWithValue(
+            const MockProjectScanService(),
+          ),
+        ],
+        child: const MiseGuiApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('发现新版本'), findsOneWidget);
+    expect(find.text('1.0.1'), findsWidgets);
+    expect(find.text('修复若干启动和安装问题'), findsOneWidget);
   });
 }
