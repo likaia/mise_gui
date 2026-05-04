@@ -31,6 +31,22 @@ class AppVersionInfo {
       buildNumber.isEmpty ? shortLabel : '$shortLabel+$buildNumber';
 }
 
+class AppUpdateInfo {
+  const AppUpdateInfo({
+    required this.currentVersion,
+    required this.latestVersion,
+    required this.tagName,
+    required this.releaseNotes,
+    required this.releaseUrl,
+  });
+
+  final String currentVersion;
+  final String latestVersion;
+  final String tagName;
+  final String releaseNotes;
+  final String releaseUrl;
+}
+
 class EnvironmentSignal {
   const EnvironmentSignal({
     required this.title,

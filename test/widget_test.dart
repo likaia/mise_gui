@@ -6,6 +6,7 @@ import 'package:mise_gui/app/bootstrap/app.dart';
 import 'package:mise_gui/app/bootstrap/dependencies.dart';
 import 'package:mise_gui/models/app_models.dart';
 import 'package:mise_gui/services/app_release_service.dart';
+import 'package:mise_gui/services/app_update_service.dart';
 import 'package:mise_gui/services/history_service.dart';
 import 'package:mise_gui/services/mise_cli_service.dart';
 import 'package:mise_gui/services/mise_process_service.dart';
@@ -41,6 +42,17 @@ class _MissingMiseProcessService implements MiseProcessService {
   }
 }
 
+class _NoopAppUpdateService implements AppUpdateService {
+  const _NoopAppUpdateService();
+
+  @override
+  Future<AppUpdateInfo?> checkForUpdate({
+    required String currentVersion,
+  }) async {
+    return null;
+  }
+}
+
 void main() {
   testWidgets('loads dashboard shell', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1600, 1200);
@@ -52,6 +64,9 @@ void main() {
         overrides: <Override>[
           appReleaseServiceProvider.overrideWithValue(
             const _FakeAppReleaseService(),
+          ),
+          appUpdateServiceProvider.overrideWithValue(
+            const _NoopAppUpdateService(),
           ),
           miseCliServiceProvider.overrideWithValue(const MockMiseCliService()),
           historyServiceProvider.overrideWithValue(const MockHistoryService()),
@@ -82,6 +97,9 @@ void main() {
         overrides: <Override>[
           appReleaseServiceProvider.overrideWithValue(
             const _FakeAppReleaseService(),
+          ),
+          appUpdateServiceProvider.overrideWithValue(
+            const _NoopAppUpdateService(),
           ),
           miseProcessServiceProvider.overrideWithValue(
             const _MissingMiseProcessService(),
