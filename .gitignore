@@ -48,3 +48,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Release artifacts
+/dist/
+*.dmg
+*.zip
+
+# Apple signing, notarization, and provisioning secrets
+*.p12
+*.p8
+*.cer
+*.cert
+*.key
+*.pem
+*.csr
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db
+AuthKey_*.p8
