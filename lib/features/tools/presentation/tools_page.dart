@@ -8,14 +8,46 @@ import 'package:mise_gui/app/theme/app_theme.dart';
 import 'package:mise_gui/features/dashboard/application/dashboard_provider.dart';
 import 'package:mise_gui/features/tools/application/tools_provider.dart';
 import 'package:mise_gui/models/app_models.dart';
+import 'package:mise_gui/services/mise_cli_service.dart';
 import 'package:mise_gui/services/mise_process_service.dart';
+import 'package:mise_gui/services/mise_query_service.dart';
 import 'package:mise_gui/shared/ui/action_preview_dialog.dart';
 import 'package:mise_gui/shared/ui/app_page_scaffold.dart';
 import 'package:mise_gui/shared/ui/app_panel.dart';
 import 'package:mise_gui/shared/ui/async_state_view.dart';
 import 'package:mise_gui/shared/ui/history_entry_dialog.dart';
 import 'package:mise_gui/shared/ui/inline_notice_bar.dart';
-import 'package:mise_gui/shared/ui/status_badge.dart';
+
+List<String> selectVersionSuggestions(List<MiseRemoteToolVersionRef> versions) {
+  final stableVersions = versions.where((version) => !version.rolling).toList();
+  final source = stableVersions.isNotEmpty ? stableVersions : versions;
+  if (source.isEmpty) {
+    return const [];
+  }
+
+  final latestByMajor = <String, String>{};
+  for (final version in source) {
+    final value = version.version.trim();
+    if (value.isEmpty) {
+      continue;
+    }
+
+    final majorKey = _majorVersionKey(value);
+    final current = latestByMajor[majorKey];
+    if (current == null || compareToolVersions(value, current) > 0) {
+      latestByMajor[majorKey] = value;
+    }
+  }
+
+  final selected = latestByMajor.values.toList()
+    ..sort((left, right) => compareToolVersions(right, left));
+  return selected.take(5).toList(growable: false);
+}
+
+String _majorVersionKey(String input) {
+  final match = RegExp(r'(\d+)').firstMatch(input);
+  return match?.group(1) ?? input;
+}
 
 class ToolsPage extends ConsumerStatefulWidget {
   const ToolsPage({super.key});
@@ -94,7 +126,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     });
 
     try {
-      await ref.refresh(toolsProvider.future);
+      final _ = await ref.refresh(toolsProvider.future);
       final selectedToolId = _selectedToolId;
       if (selectedToolId != null) {
         await _loadToolDetail(selectedToolId, forceRefresh: true);
@@ -536,24 +568,7 @@ class _InstallToolDialogState extends ConsumerState<_InstallToolDialog> {
       if (!mounted || token != _lookupToken) {
         return;
       }
-
-      final stableVersions =
-          versions
-              .where((version) => !version.rolling)
-              .map((version) => version.version)
-              .toSet()
-              .toList()
-            ..sort(_compareVersionsDesc);
-      final selected =
-          (stableVersions.isNotEmpty
-                    ? stableVersions
-                    : versions
-                          .map((version) => version.version)
-                          .toSet()
-                          .toList()
-                ..sort(_compareVersionsDesc))
-              .take(5)
-              .toList(growable: false);
+      final selected = selectVersionSuggestions(versions);
 
       setState(() {
         _loadingVersions = false;
@@ -570,27 +585,6 @@ class _InstallToolDialogState extends ConsumerState<_InstallToolDialog> {
         _lookupMessage = '远端版本读取失败，仍可手动输入版本号。';
       });
     }
-  }
-
-  int _compareVersionsDesc(String a, String b) {
-    return _versionWeight(b).compareTo(_versionWeight(a));
-  }
-
-  int _versionWeight(String input) {
-    final numbers = RegExp(r'\d+')
-        .allMatches(input)
-        .map((match) => int.tryParse(match.group(0)!) ?? 0)
-        .take(4)
-        .toList();
-
-    while (numbers.length < 4) {
-      numbers.add(0);
-    }
-
-    return numbers[0] * 100000000 +
-        numbers[1] * 1000000 +
-        numbers[2] * 10000 +
-        numbers[3];
   }
 
   @override
@@ -638,7 +632,7 @@ class _InstallToolDialogState extends ConsumerState<_InstallToolDialog> {
               focusNode: _versionFocusNode,
               decoration: const InputDecoration(
                 labelText: 'Version',
-                hintText: '例如: 20.19.0 / 3.12.9 / latest',
+                hintText: '例如: 20 或 20.19.0 / 3.12 或 3.12.9 / latest',
               ),
             ),
             if (_versionFocusNode.hasFocus &&
@@ -747,7 +741,7 @@ class _VersionSuggestionList extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 4, 6, 8),
                   child: Text(
-                    '远端可选版本',
+                    '远端可选版本（各大版本最新发行版）',
                     style: TextStyle(
                       color: colors.textMuted,
                       fontSize: 12,
@@ -1097,7 +1091,38 @@ class _ToolWorkspace extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ToolHeroPanel(tool: tool, onOpenPreview: onOpenPreview);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _ToolHeroPanel(tool: tool, onOpenPreview: onOpenPreview),
+        const SizedBox(height: 16),
+        _VersionInventoryPanel(
+          title: '本机已下载版本',
+          subtitle: '已安装到本机，可直接切换。',
+          versions: tool.installedVersions,
+          emptyState: const _PanelEmptyStateData(
+            icon: Icons.inventory_2_outlined,
+            title: '当前还没有本地版本库存',
+            message: '安装过至少一个版本后，这里会显示完整的本机版本列表。',
+            level: HealthLevel.info,
+          ),
+          onOpenPreview: onOpenPreview,
+        ),
+        const SizedBox(height: 16),
+        _VersionInventoryPanel(
+          title: '远端可用版本',
+          subtitle: '可安装或升级的远端版本。',
+          versions: tool.remoteVersions,
+          emptyState: const _PanelEmptyStateData(
+            icon: Icons.cloud_off_rounded,
+            title: '暂时没有拉到远端版本',
+            message: '可以稍后重试同步，或者先使用上面的本机版本库存继续切换。',
+            level: HealthLevel.warning,
+          ),
+          onOpenPreview: onOpenPreview,
+        ),
+      ],
+    );
   }
 }
 
@@ -1338,10 +1363,7 @@ class _VersionInventoryPanel extends StatelessWidget {
           _ToolSectionHeader(
             title: title,
             subtitle: subtitle,
-            badgeLabel: versions.isEmpty ? '暂无内容' : '${versions.length} 条',
-            badgeLevel: versions.isEmpty
-                ? HealthLevel.info
-                : HealthLevel.healthy,
+            badgeLabel: versions.length > 1 ? '${versions.length} 条' : null,
           ),
           const SizedBox(height: 18),
           if (versions.isEmpty)
@@ -1353,18 +1375,41 @@ class _VersionInventoryPanel extends StatelessWidget {
                     title: '当前没有可展示的数据',
                     message: '稍后可以重新同步，或先查看命令结果。',
                     level: HealthLevel.info,
-                  ),
+              ),
               onOpenPreview: onOpenPreview,
             )
           else
-            for (final version in versions)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _VersionCard(
-                  version: version,
-                  onOpenPreview: onOpenPreview,
+            Container(
+              decoration: BoxDecoration(
+                color: AppTheme.colorsOf(context).panelRaised.withValues(
+                  alpha: 0.68,
                 ),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: AppTheme.colorsOf(context).border),
               ),
+              child: Column(
+                children: [
+                  for (var index = 0; index < versions.length; index++) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      child: _VersionCard(
+                        version: versions[index],
+                        onOpenPreview: onOpenPreview,
+                      ),
+                    ),
+                    if (index != versions.length - 1)
+                      Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: AppTheme.colorsOf(context).border,
+                      ),
+                  ],
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -1383,409 +1428,185 @@ class _VersionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
+    final statusLabel = _statusLabel();
+    final statusLevel = _statusLevel();
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.panelRaised.withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                version.version,
-                style: const TextStyle(
-                  fontFamily: 'FiraCode',
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              StatusBadge(label: version.channel, level: version.level),
-              if (version.isActive)
-                const StatusBadge(label: '当前生效', level: HealthLevel.healthy),
-              if (version.isRecommended)
-                const StatusBadge(label: '推荐版本', level: HealthLevel.info),
-              if (version.isAlias)
-                const StatusBadge(label: '别名', level: HealthLevel.info),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            version.note,
-            style: TextStyle(color: colors.textMuted, height: 1.45),
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              if (version.isActive)
-                TextButton.icon(
-                  onPressed: null,
-                  icon: const Icon(Icons.check_circle_rounded),
-                  label: const Text('当前版本'),
-                )
-              else if (version.isInstalled)
-                OutlinedButton.icon(
-                  onPressed: () => onOpenPreview(
-                    context,
-                    ActionPreviewDialogData(
-                      title: '切换到 ${version.version}',
-                      summary: '这个版本已经在本机安装，确认后会开始版本切换。',
-                      command: version.commandPreview,
-                      level: version.level,
-                      affectedFiles: _affectedFilesForToolCommand(
-                        version.commandPreview,
-                      ),
-                      impactScope: const [
-                        '当前工具的默认激活版本会变化。',
-                        '相关项目的解析结果可能随之更新。',
-                      ],
-                      riskNotes: const ['切换前请先确认是否有项目级版本覆盖。'],
-                      confirmLabel: '确认切换',
-                    ),
-                  ),
-                  icon: const Icon(Icons.swap_horiz_rounded),
-                  label: const Text('切换'),
-                )
-              else
-                FilledButton.icon(
-                  onPressed: () => onOpenPreview(
-                    context,
-                    ActionPreviewDialogData(
-                      title: '安装 ${version.version}',
-                      summary: '这个版本还没安装到本机，确认后会开始安装。',
-                      command: version.commandPreview,
-                      level: version.level,
-                      affectedFiles: _affectedFilesForToolCommand(
-                        version.commandPreview,
-                      ),
-                      impactScope: const [
-                        '会新增本地已安装版本记录。',
-                        '如果接着激活，当前版本来源也可能改变。',
-                      ],
-                      riskNotes: const ['安装时会访问网络，并更新本地缓存。'],
-                      confirmLabel: version.isRecommended ? '确认升级' : '确认安装',
-                    ),
-                  ),
-                  icon: Icon(
-                    version.isRecommended
-                        ? Icons.upgrade_rounded
-                        : Icons.download_rounded,
-                  ),
-                  label: Text(version.isRecommended ? '升级' : '安装'),
-                ),
-              OutlinedButton.icon(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stacked = constraints.maxWidth < 520;
+        final actionRow = Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.end,
+          children: [
+            if (version.isActive)
+              TextButton.icon(
+                onPressed: null,
+                icon: const Icon(Icons.check_circle_rounded),
+                label: const Text('当前使用'),
+              )
+            else if (version.isInstalled)
+              OutlinedButton(
                 onPressed: () => onOpenPreview(
                   context,
                   ActionPreviewDialogData(
-                    title: '命令预览',
-                    summary: '这条命令是当前界面为这个版本动作准备的实际 CLI。',
+                    title: '切换到 ${version.version}',
+                    summary: '这个版本已经在本机安装，确认后会开始版本切换。',
                     command: version.commandPreview,
                     level: version.level,
-                  ),
-                ),
-                icon: const Icon(Icons.terminal_rounded),
-                label: const Text('查看命令'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProjectImpactPanel extends StatelessWidget {
-  const _ProjectImpactPanel({required this.projects});
-
-  final List<ToolProjectImpact> projects;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-
-    return AppPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _ToolSectionHeader(
-            title: '项目影响',
-            subtitle: '这里展示当前版本会在哪些配置或项目里生效，方便先判断影响范围。',
-            badgeLabel: projects.isEmpty ? '范围集中' : '${projects.length} 条',
-            badgeLevel: projects.isEmpty
-                ? HealthLevel.healthy
-                : HealthLevel.warning,
-          ),
-          const SizedBox(height: 18),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: colors.backgroundSoft.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: colors.border),
-            ),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _CompactFactChip(label: '受影响条目', value: '${projects.length}'),
-                _CompactFactChip(
-                  label: '当前状态',
-                  value: projects.length <= 1 ? '范围明确' : '需重点确认',
-                  level: projects.length <= 1
-                      ? HealthLevel.healthy
-                      : HealthLevel.warning,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (projects.isEmpty)
-            const _PanelEmptyStateCard(
-              data: _PanelEmptyStateData(
-                icon: Icons.layers_clear_outlined,
-                title: '当前没有额外影响范围',
-                message: '这次版本不会扩散到其他项目或配置来源，当前作用范围比较集中。',
-                level: HealthLevel.healthy,
-              ),
-            )
-          else
-            for (final project in projects)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _ProjectImpactCard(project: project),
-              ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ActionPipelinePanel extends StatelessWidget {
-  const _ActionPipelinePanel({
-    required this.actions,
-    required this.onOpenPreview,
-  });
-
-  final List<ToolCommandAction> actions;
-  final Future<void> Function(
-    BuildContext context,
-    ActionPreviewDialogData data,
-  )
-  onOpenPreview;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _ToolSectionHeader(
-            title: '建议动作',
-            subtitle: '根据当前版本来源整理出更稳妥的下一步，执行前仍然会先展示实际命令。',
-            badgeLabel: actions.isEmpty ? '无需处理' : '${actions.length} 条',
-            badgeLevel: actions.isEmpty
-                ? HealthLevel.healthy
-                : HealthLevel.info,
-          ),
-          const SizedBox(height: 18),
-          if (actions.isEmpty)
-            const _PanelEmptyStateCard(
-              data: _PanelEmptyStateData(
-                icon: Icons.playlist_add_check_circle_outlined,
-                title: '当前不需要额外操作',
-                message: '当前版本状态已经比较稳定，如果需要进一步确认，可以直接查看命令预览。',
-                level: HealthLevel.healthy,
-              ),
-            )
-          else
-            for (final action in actions)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _ActionRecommendationCard(
-                  action: action,
-                  onOpenPreview: onOpenPreview,
-                ),
-              ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProjectImpactCard extends StatelessWidget {
-  const _ProjectImpactCard({required this.project});
-
-  final ToolProjectImpact project;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.panelRaised.withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                project.projectName,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              StatusBadge(
-                label: '请求 ${project.requestedVersion}',
-                level: HealthLevel.info,
-              ),
-              StatusBadge(
-                label: '生效 ${project.resolvedVersion}',
-                level: project.level,
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SelectableText(
-            project.path,
-            style: TextStyle(
-              color: colors.textMuted,
-              fontFamily: 'FiraCode',
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            project.reason,
-            style: TextStyle(color: colors.textMuted, height: 1.45),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ActionRecommendationCard extends StatelessWidget {
-  const _ActionRecommendationCard({
-    required this.action,
-    required this.onOpenPreview,
-  });
-
-  final ToolCommandAction action;
-  final Future<void> Function(
-    BuildContext context,
-    ActionPreviewDialogData data,
-  )
-  onOpenPreview;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.panelRaised.withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.border),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final stacked = constraints.maxWidth < 430;
-
-          final content = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    action.label,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
+                    affectedFiles: _affectedFilesForToolCommand(
+                      version.commandPreview,
                     ),
+                    impactScope: const [
+                      '当前工具的默认激活版本会变化。',
+                      '相关项目的解析结果可能随之更新。',
+                    ],
+                    riskNotes: const ['切换前请先确认是否有项目级版本覆盖。'],
+                    confirmLabel: '确认切换',
                   ),
-                  StatusBadge(label: action.level.label, level: action.level),
-                ],
+                ),
+                child: const Text('切换'),
+              )
+            else
+              FilledButton(
+                onPressed: () => onOpenPreview(
+                  context,
+                  ActionPreviewDialogData(
+                    title: '安装 ${version.version}',
+                    summary: '这个版本还没安装到本机，确认后会开始安装。',
+                    command: version.commandPreview,
+                    level: version.level,
+                    affectedFiles: _affectedFilesForToolCommand(
+                      version.commandPreview,
+                    ),
+                    impactScope: const [
+                      '会新增本地已安装版本记录。',
+                      '如果接着激活，当前版本来源也可能改变。',
+                    ],
+                    riskNotes: const ['安装时会访问网络，并更新本地缓存。'],
+                    confirmLabel: version.isRecommended ? '确认升级' : '确认安装',
+                  ),
+                ),
+                child: Text(version.isRecommended ? '升级' : '安装'),
               ),
-              const SizedBox(height: 10),
-              Text(
-                action.summary,
-                style: TextStyle(color: colors.textMuted, height: 1.45),
+            IconButton.outlined(
+              tooltip: '查看命令',
+              onPressed: () => onOpenPreview(
+                context,
+                ActionPreviewDialogData(
+                  title: '命令预览',
+                  summary: '这条命令是当前界面为这个版本动作准备的实际 CLI。',
+                  command: version.commandPreview,
+                  level: version.level,
+                ),
               ),
+              icon: const Icon(Icons.terminal_rounded),
+            ),
+          ],
+        );
+
+        final info = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SelectableText(
+              version.version,
+              style: const TextStyle(
+                fontFamily: 'FiraCode',
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (statusLabel != null) ...[
+              const SizedBox(height: 6),
+              _VersionStateLabel(label: statusLabel, level: statusLevel),
             ],
-          );
+          ],
+        );
 
-          final button = FilledButton.icon(
-            onPressed: () => onOpenPreview(
-              context,
-              ActionPreviewDialogData(
-                title: action.label,
-                summary: action.summary,
-                command: action.command,
-                level: action.level,
-                affectedFiles: _affectedFilesForToolCommand(action.command),
-                impactScope: const [
-                  '当前会严格按预览中的 CLI 顺序执行。',
-                  '执行后会自动刷新工具页与总览页数据。',
-                ],
-                riskNotes: _toolCommandIsMutating(action.command)
-                    ? const ['如果命令会写配置或切换版本，请先确认当前工作目录是否正确。']
-                    : const [],
-                confirmLabel: _toolCommandIsMutating(action.command)
-                    ? '确认执行'
-                    : '运行查询',
-              ),
-            ),
-            icon: Icon(
-              _toolCommandIsMutating(action.command)
-                  ? Icons.play_arrow_rounded
-                  : Icons.terminal_rounded,
-            ),
-            label: Text(
-              _toolCommandIsMutating(action.command) ? '执行动作' : '查看命令',
-            ),
-          );
-
-          if (stacked) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [content, const SizedBox(height: 14), button],
-            );
-          }
-
-          return Row(
+        if (stacked) {
+          return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: content),
-              const SizedBox(width: 16),
-              button,
+              info,
+              const SizedBox(height: 12),
+              actionRow,
             ],
           );
-        },
-      ),
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(child: info),
+            const SizedBox(width: 16),
+            actionRow,
+          ],
+        );
+      },
+    );
+  }
+
+  String? _statusLabel() {
+    if (version.isActive) {
+      return '当前使用';
+    }
+    if (version.isRecommended) {
+      return '推荐升级';
+    }
+    if (version.isAlias) {
+      return '别名映射';
+    }
+    return null;
+  }
+
+  HealthLevel _statusLevel() {
+    if (version.isActive) {
+      return HealthLevel.healthy;
+    }
+    if (version.isRecommended) {
+      return HealthLevel.info;
+    }
+    return version.level;
+  }
+}
+
+class _VersionStateLabel extends StatelessWidget {
+  const _VersionStateLabel({required this.label, required this.level});
+
+  final String label;
+  final HealthLevel level;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final color = switch (level) {
+      HealthLevel.healthy => colors.accent,
+      HealthLevel.info => colors.info,
+      HealthLevel.warning => colors.warning,
+      HealthLevel.critical => colors.danger,
+    };
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1794,14 +1615,12 @@ class _ToolSectionHeader extends StatelessWidget {
   const _ToolSectionHeader({
     required this.title,
     required this.subtitle,
-    required this.badgeLabel,
-    required this.badgeLevel,
+    this.badgeLabel,
   });
 
   final String title;
   final String subtitle;
-  final String badgeLabel;
-  final HealthLevel badgeLevel;
+  final String? badgeLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1826,8 +1645,10 @@ class _ToolSectionHeader extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
-            StatusBadge(label: badgeLabel, level: badgeLevel),
+            if (badgeLabel != null) ...[
+              const SizedBox(width: 12),
+              _SectionCountLabel(label: badgeLabel!),
+            ],
           ],
         ),
         const SizedBox(height: 14),
@@ -1841,22 +1662,38 @@ class _ToolSectionHeader extends StatelessWidget {
   }
 }
 
+class _SectionCountLabel extends StatelessWidget {
+  const _SectionCountLabel({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Text(
+      label,
+      style: TextStyle(
+        color: colors.textMuted,
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
 class _PanelEmptyStateData {
   const _PanelEmptyStateData({
     required this.icon,
     required this.title,
     required this.message,
     required this.level,
-    this.actionLabel,
-    this.previewData,
   });
 
   final IconData icon;
   final String title;
   final String message;
   final HealthLevel level;
-  final String? actionLabel;
-  final ActionPreviewDialogData? previewData;
 }
 
 class _PanelEmptyStateCard extends StatelessWidget {
@@ -1936,183 +1773,6 @@ class _PanelEmptyStateCard extends StatelessWidget {
               ),
             ],
           ),
-          if (data.actionLabel != null &&
-              data.previewData != null &&
-              onOpenPreview != null) ...[
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: () => onOpenPreview!(context, data.previewData!),
-              icon: const Icon(Icons.terminal_rounded),
-              label: Text(data.actionLabel!),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _CompactFactChip extends StatelessWidget {
-  const _CompactFactChip({
-    required this.label,
-    required this.value,
-    this.level = HealthLevel.info,
-  });
-
-  final String label;
-  final String value;
-  final HealthLevel level;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-    final color = switch (level) {
-      HealthLevel.healthy => colors.accent,
-      HealthLevel.info => colors.info,
-      HealthLevel.warning => colors.warning,
-      HealthLevel.critical => colors.danger,
-    };
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.24)),
-      ),
-      child: Text(
-        '$label: $value',
-        style: TextStyle(
-          color: color,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
-class _ToolOverviewStrip extends StatelessWidget {
-  const _ToolOverviewStrip({required this.tool});
-
-  final ToolRecord tool;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-    final items = <({String label, String value})>[
-      (label: '当前版本', value: tool.activeVersion),
-      (label: '请求版本', value: tool.requestedVersion),
-      (
-        label: '推荐稳定版',
-        value: tool.remoteState == ToolRemoteState.pending
-            ? '正在同步'
-            : tool.latestStableVersion,
-      ),
-      (label: '关联项目', value: '${tool.projectImpactCount}'),
-    ];
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 860;
-
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: colors.backgroundSoft.withValues(alpha: 0.76),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: colors.border),
-          ),
-          child: compact
-              ? Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final item in items)
-                      SizedBox(
-                        width: constraints.maxWidth > 540
-                            ? (constraints.maxWidth - 22) / 2
-                            : double.infinity,
-                        child: _OverviewMetricItem(
-                          label: item.label,
-                          value: item.value,
-                        ),
-                      ),
-                  ],
-                )
-              : Row(
-                  children: [
-                    for (var index = 0; index < items.length; index++) ...[
-                      Expanded(
-                        child: _OverviewMetricItem(
-                          label: items[index].label,
-                          value: items[index].value,
-                          dense: true,
-                        ),
-                      ),
-                      if (index != items.length - 1)
-                        Container(
-                          width: 1,
-                          height: 46,
-                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                          color: colors.border,
-                        ),
-                    ],
-                  ],
-                ),
-        );
-      },
-    );
-  }
-}
-
-class _OverviewMetricItem extends StatelessWidget {
-  const _OverviewMetricItem({
-    required this.label,
-    required this.value,
-    this.dense = false,
-  });
-
-  final String label;
-  final String value;
-  final bool dense;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: dense ? 10 : 14,
-        vertical: dense ? 10 : 14,
-      ),
-      decoration: BoxDecoration(
-        color: dense
-            ? Colors.transparent
-            : colors.panelRaised.withValues(alpha: 0.68),
-        borderRadius: BorderRadius.circular(18),
-        border: dense ? null : Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: colors.textMuted,
-              fontSize: dense ? 12 : 13,
-            ),
-          ),
-          SizedBox(height: dense ? 6 : 8),
-          SelectableText(
-            value,
-            style: TextStyle(
-              fontFamily: 'FiraCode',
-              fontSize: dense ? 13 : 15,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
         ],
       ),
     );
@@ -2145,15 +1805,6 @@ class _MiniFact extends StatelessWidget {
       ),
     );
   }
-}
-
-bool _toolCommandIsMutating(String command) {
-  final normalized = command.toLowerCase();
-  return normalized.contains('mise install ') ||
-      normalized.contains('mise use ') ||
-      normalized.contains('mise uninstall ') ||
-      normalized.contains('mise unuse ') ||
-      normalized.contains('mise settings set ');
 }
 
 List<String> _affectedFilesForToolCommand(String command) {

@@ -7,6 +7,42 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+namespace {
+constexpr gint kDefaultWindowWidth = 1510;
+constexpr gint kDefaultWindowHeight = 870;
+constexpr gint kMinimumWindowWidth = 960;
+constexpr gint kMinimumWindowHeight = 640;
+constexpr gint kHorizontalMargin = 80;
+constexpr gint kVerticalMargin = 80;
+
+struct WindowSize {
+  gint width;
+  gint height;
+};
+
+WindowSize ResolveInitialWindowSize() {
+  GdkDisplay* display = gdk_display_get_default();
+  if (display == nullptr) {
+    return {kDefaultWindowWidth, kDefaultWindowHeight};
+  }
+
+  GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+  if (monitor == nullptr) {
+    return {kDefaultWindowWidth, kDefaultWindowHeight};
+  }
+
+  GdkRectangle workarea;
+  gdk_monitor_get_workarea(monitor, &workarea);
+
+  return {
+      CLAMP(workarea.width - kHorizontalMargin, kMinimumWindowWidth,
+            kDefaultWindowWidth),
+      CLAMP(workarea.height - kVerticalMargin, kMinimumWindowHeight,
+            kDefaultWindowHeight),
+  };
+}
+}  // namespace
+
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
@@ -62,7 +98,10 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "Mise GUI");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
+  const WindowSize initial_window_size = ResolveInitialWindowSize();
+  gtk_window_set_default_size(window, initial_window_size.width,
+                              initial_window_size.height);
+  gtk_window_set_position(window, GTK_WIN_POS_CENTER);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

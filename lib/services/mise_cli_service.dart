@@ -24,14 +24,19 @@ abstract class MiseCliService {
 }
 
 class LiveMiseCliService implements MiseCliService {
-  const LiveMiseCliService({required MiseQueryService queryService})
-    : _queryService = queryService;
+  const LiveMiseCliService({
+    required MiseQueryService queryService,
+    required MiseProcessService processService,
+  }) : _queryService = queryService,
+       _processService = processService;
 
   final MiseQueryService _queryService;
+  final MiseProcessService _processService;
 
   @override
   Future<List<EnvironmentSignal>> fetchEnvironmentSignals() async {
     try {
+      final shellEnvironment = await _processService.inspectShellEnvironment();
       final currentTools = await _queryService.fetchCurrentTools();
       final environment = await _queryService.fetchEnvironment();
       final settings = await _queryService.fetchSettings();
@@ -55,6 +60,15 @@ class LiveMiseCliService implements MiseCliService {
       final settingSources = _collectSettingSources(settings);
 
       return [
+        if (shellEnvironment.source == ShellEnvironmentSource.desktopFallback)
+          EnvironmentSignal(
+            title: 'Shell 环境',
+            value: '已回退',
+            detail:
+                shellEnvironment.detail ??
+                '未能可靠读取登录 shell 环境，已回退到桌面进程环境。PATH 与 JAVA_HOME 判断会更保守，但基础功能仍可继续使用。',
+            level: HealthLevel.info,
+          ),
         EnvironmentSignal(
           title: '活跃工具链',
           value: '${currentTools.length} 个活跃项',
@@ -96,13 +110,13 @@ class LiveMiseCliService implements MiseCliService {
       if (isMiseCommandUnavailable(error)) {
         final installCommand = recommendedMiseInstallCommand();
         return [
-          EnvironmentSignal(
+          const EnvironmentSignal(
             title: 'mise CLI',
             value: '未检测到',
             detail: '当前桌面应用没有找到可执行的 mise 命令，因此无法读取当前环境信息。',
             level: HealthLevel.critical,
           ),
-          EnvironmentSignal(
+          const EnvironmentSignal(
             title: '首次安装状态',
             value: '需初始化',
             detail: '这更像首次启动引导场景，不应该继续展示模拟的工具链状态。',
@@ -123,13 +137,13 @@ class LiveMiseCliService implements MiseCliService {
         ];
       }
       return [
-        EnvironmentSignal(
+        const EnvironmentSignal(
           title: '环境信号读取失败',
           value: '暂不可用',
           detail: '这次没有成功从 mise CLI 读取环境信息，请稍后重试。',
           level: HealthLevel.warning,
         ),
-        EnvironmentSignal(
+        const EnvironmentSignal(
           title: '建议动作',
           value: '重新刷新',
           detail: '可以先点击刷新环境数据；如果仍然失败，再查看错误输出定位问题。',
@@ -412,7 +426,9 @@ class LiveMiseCliService implements MiseCliService {
       final entry = outdated[tool];
       if (entry is Map<String, dynamic>) {
         final latest = entry['latest']?.toString().trim();
-        if (latest != null && latest.isNotEmpty) {
+        if (latest != null &&
+            latest.isNotEmpty &&
+            compareToolVersions(latest, activeVersion) > 0) {
           return latest;
         }
       }
@@ -497,11 +513,10 @@ class LiveMiseCliService implements MiseCliService {
     required String tool,
     required String activeVersion,
     required String requestedVersion,
-    required List<MiseRemoteToolVersionRef> versions,
+  required List<MiseRemoteToolVersionRef> versions,
   }) {
     final normalizedRequested = requestedVersion.trim();
     final requestedMajor = _leadingMajor(normalizedRequested);
-    final activeComparable = _numericComparable(activeVersion);
 
     Iterable<MiseRemoteToolVersionRef> candidates = versions.where(
       (version) => !version.rolling,
@@ -509,27 +524,32 @@ class LiveMiseCliService implements MiseCliService {
 
     if (tool == 'java' && requestedMajor != null) {
       candidates = candidates.where(
-        (version) => version.version.startsWith('$requestedMajor.'),
+        (version) =>
+            _leadingMajor(version.version) == requestedMajor &&
+            compareToolVersions(version.version, activeVersion) > 0,
       );
     } else if (tool == 'flutter') {
       candidates = candidates.where(
         (version) =>
             version.version.contains('stable') &&
-            _numericComparable(version.version) > activeComparable,
+            compareToolVersions(version.version, activeVersion) > 0,
       );
     } else if (requestedMajor != null) {
       candidates = candidates.where(
         (version) =>
             version.version.startsWith('$requestedMajor.') &&
-            _numericComparable(version.version) > activeComparable,
+            compareToolVersions(version.version, activeVersion) > 0,
       );
     } else {
       candidates = candidates.where(
-        (version) => _numericComparable(version.version) > activeComparable,
+        (version) => compareToolVersions(version.version, activeVersion) > 0,
       );
     }
 
-    final list = candidates.toList();
+    final list = candidates.toList()
+      ..sort(
+        (left, right) => compareToolVersions(left.version, right.version),
+      );
     if (list.isEmpty) {
       return const [];
     }
@@ -545,7 +565,7 @@ class LiveMiseCliService implements MiseCliService {
   }) {
     if (outdatedEntry is Map<String, dynamic>) {
       final latest = outdatedEntry['latest'] as String?;
-      if (latest != null && latest != activeVersion) {
+      if (latest != null && compareToolVersions(latest, activeVersion) > 0) {
         return latest;
       }
     }
@@ -726,23 +746,6 @@ class LiveMiseCliService implements MiseCliService {
     ].join('\n');
   }
 
-  int _numericComparable(String input) {
-    final numbers = RegExp(r'\d+')
-        .allMatches(input)
-        .map((match) => int.tryParse(match.group(0)!) ?? 0)
-        .take(4)
-        .toList();
-
-    while (numbers.length < 4) {
-      numbers.add(0);
-    }
-
-    return numbers[0] * 100000000 +
-        numbers[1] * 1000000 +
-        numbers[2] * 10000 +
-        numbers[3];
-  }
-
   String? _leadingMajor(String input) {
     final match = RegExp(r'(\d+)').firstMatch(input);
     return match?.group(1);
@@ -771,6 +774,90 @@ class LiveMiseCliService implements MiseCliService {
 
     visit(settings);
     return sources.toList()..sort();
+  }
+}
+
+int compareToolVersions(String left, String right) {
+  final leftTokens = _VersionToken.parse(left);
+  final rightTokens = _VersionToken.parse(right);
+  final limit = leftTokens.length > rightTokens.length
+      ? leftTokens.length
+      : rightTokens.length;
+
+  for (var index = 0; index < limit; index += 1) {
+    if (index >= leftTokens.length) {
+      return _remainingTokenWeight(rightTokens, index) == 0 ? 0 : -1;
+    }
+    if (index >= rightTokens.length) {
+      return _remainingTokenWeight(leftTokens, index) == 0 ? 0 : 1;
+    }
+
+    final compared = leftTokens[index].compareTo(rightTokens[index]);
+    if (compared != 0) {
+      return compared;
+    }
+  }
+
+  return 0;
+}
+
+int _remainingTokenWeight(List<_VersionToken> tokens, int startIndex) {
+  for (var index = startIndex; index < tokens.length; index += 1) {
+    final token = tokens[index];
+    if (token is _NumericVersionToken && token.value == 0) {
+      continue;
+    }
+    return 1;
+  }
+  return 0;
+}
+
+sealed class _VersionToken {
+  const _VersionToken();
+
+  factory _VersionToken.numeric(int value) = _NumericVersionToken;
+  factory _VersionToken.text(String value) = _TextVersionToken;
+
+  static List<_VersionToken> parse(String input) {
+    final matches = RegExp(r'\d+|[A-Za-z]+').allMatches(input);
+    return matches.map((match) {
+      final value = match.group(0)!;
+      final numeric = int.tryParse(value);
+      if (numeric != null) {
+        return _VersionToken.numeric(numeric);
+      }
+      return _VersionToken.text(value.toLowerCase());
+    }).toList(growable: false);
+  }
+
+  int compareTo(_VersionToken other);
+}
+
+final class _NumericVersionToken extends _VersionToken {
+  const _NumericVersionToken(this.value);
+
+  final int value;
+
+  @override
+  int compareTo(_VersionToken other) {
+    return switch (other) {
+      _NumericVersionToken(:final value) => this.value.compareTo(value),
+      _TextVersionToken() => -1,
+    };
+  }
+}
+
+final class _TextVersionToken extends _VersionToken {
+  const _TextVersionToken(this.value);
+
+  final String value;
+
+  @override
+  int compareTo(_VersionToken other) {
+    return switch (other) {
+      _NumericVersionToken() => 1,
+      _TextVersionToken(:final value) => this.value.compareTo(value),
+    };
   }
 }
 

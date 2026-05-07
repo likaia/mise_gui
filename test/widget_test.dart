@@ -28,6 +28,14 @@ class _MissingMiseProcessService implements MiseProcessService {
   const _MissingMiseProcessService();
 
   @override
+  Future<ShellEnvironmentLoadResult> inspectShellEnvironment() async {
+    return const ShellEnvironmentLoadResult(
+      source: ShellEnvironmentSource.desktopFallback,
+      detail: '未能可靠读取登录 shell 环境，已回退到桌面进程环境。',
+    );
+  }
+
+  @override
   Future<MiseCommandResult> run(MiseCommandRequest request) async {
     throw MiseProcessException(
       message: 'Unable to launch mise CLI from the desktop app',

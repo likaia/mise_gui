@@ -98,8 +98,10 @@ final miseActionServiceProvider = Provider<MiseActionService>(
 );
 
 final miseCliServiceProvider = Provider<MiseCliService>(
-  (ref) =>
-      LiveMiseCliService(queryService: ref.watch(miseQueryServiceProvider)),
+  (ref) => LiveMiseCliService(
+    queryService: ref.watch(miseQueryServiceProvider),
+    processService: ref.watch(miseProcessServiceProvider),
+  ),
 );
 
 final configServiceProvider = Provider<ConfigService>(
