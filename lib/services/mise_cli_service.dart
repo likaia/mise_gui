@@ -259,6 +259,7 @@ class LiveMiseCliService implements MiseCliService {
       tool.id,
       activeVersion: tool.activeVersion,
     );
+    final windowsShimPath = await _processService.inspectWindowsShimPath();
     final miseExecutable = await _safeFetchMiseExecutable(tool.id);
     final shellExecutable = await _safeFetchShellExecutable(tool.id);
     final selectedRemoteVersions = _selectRemoteCandidates(
@@ -289,6 +290,8 @@ class LiveMiseCliService implements MiseCliService {
     );
     final notices = <InlineNotice>[
       if (remoteLoad.notice != null) remoteLoad.notice!,
+      if (windowsShimPath.isMissing)
+        _buildWindowsShimPathNotice(tool.id, windowsShimPath),
       if (pathConflictNotice != null) pathConflictNotice,
     ];
 
@@ -479,6 +482,20 @@ class LiveMiseCliService implements MiseCliService {
           'mise which $tool\n'
           'which $tool\n'
           'echo \$PATH',
+    );
+  }
+
+  InlineNotice _buildWindowsShimPathNotice(
+    String tool,
+    WindowsShimPathStatus status,
+  ) {
+    return InlineNotice(
+      title: '检测到 Windows 终端尚未接入 mise shims',
+      message:
+          status.detail ??
+          '${_toolName(tool)} 已由 mise 管理，但新的 cmd / PowerShell 会话里还不能直接调用。执行下面的命令后，重新打开终端即可生效。',
+      level: HealthLevel.warning,
+      commandPreview: status.commandPreview,
     );
   }
 

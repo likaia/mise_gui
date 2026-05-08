@@ -36,6 +36,13 @@ class _MissingMiseProcessService implements MiseProcessService {
   }
 
   @override
+  Future<WindowsShimPathStatus> inspectWindowsShimPath() async {
+    return const WindowsShimPathStatus(
+      source: WindowsShimPathSource.unsupported,
+    );
+  }
+
+  @override
   Future<MiseCommandResult> run(MiseCommandRequest request) async {
     throw MiseProcessException(
       message: 'Unable to launch mise CLI from the desktop app',

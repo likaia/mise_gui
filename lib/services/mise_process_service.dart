@@ -77,6 +77,24 @@ class ShellEnvironmentLoadResult {
   bool get isFromShell => source == ShellEnvironmentSource.shell;
 }
 
+enum WindowsShimPathSource { present, missing, unsupported }
+
+class WindowsShimPathStatus {
+  const WindowsShimPathStatus({
+    required this.source,
+    this.shimPath,
+    this.detail,
+    this.commandPreview,
+  });
+
+  final WindowsShimPathSource source;
+  final String? shimPath;
+  final String? detail;
+  final String? commandPreview;
+
+  bool get isMissing => source == WindowsShimPathSource.missing;
+}
+
 bool isMiseCommandUnavailable(Object error) {
   if (error is! MiseProcessException) {
     return false;
@@ -146,6 +164,7 @@ MiseFailureDiagnosis? diagnoseMiseCommandFailure({
 abstract class MiseProcessService {
   Future<MiseCommandResult> run(MiseCommandRequest request);
   Future<ShellEnvironmentLoadResult> inspectShellEnvironment();
+  Future<WindowsShimPathStatus> inspectWindowsShimPath();
 }
 
 class LocalMiseProcessService implements MiseProcessService {
@@ -213,6 +232,47 @@ class LocalMiseProcessService implements MiseProcessService {
   @override
   Future<ShellEnvironmentLoadResult> inspectShellEnvironment() {
     return _loadShellEnvironment();
+  }
+
+  @override
+  Future<WindowsShimPathStatus> inspectWindowsShimPath() async {
+    if (!Platform.isWindows) {
+      return const WindowsShimPathStatus(
+        source: WindowsShimPathSource.unsupported,
+      );
+    }
+
+    final localAppData = Platform.environment['LOCALAPPDATA'];
+    if (localAppData == null || localAppData.isEmpty) {
+      return const WindowsShimPathStatus(
+        source: WindowsShimPathSource.missing,
+        detail: '当前还没法确认 Windows 终端是否已经接入 mise。可以先查看修复命令，按提示补齐后再重开终端。',
+      );
+    }
+
+    final shimPath = '$localAppData\\mise\\shims';
+    final path = Platform.environment['PATH'] ?? '';
+    final pathEntries = path
+        .split(';')
+        .map(_normalizeWindowsPathEntry)
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+
+    if (pathEntries.contains(_normalizeWindowsPathEntry(shimPath))) {
+      return WindowsShimPathStatus(
+        source: WindowsShimPathSource.present,
+        shimPath: shimPath,
+      );
+    }
+
+    return WindowsShimPathStatus(
+      source: WindowsShimPathSource.missing,
+      shimPath: shimPath,
+      detail:
+          '检测到 Windows 终端还没有接入 mise shims。应用已经识别到该工具由 mise 管理，但新的 cmd / PowerShell 会话里还不能直接调用。'
+          ' 执行下面的命令后，重新打开终端即可生效。',
+      commandPreview: _windowsShimPathFixCommand(shimPath),
+    );
   }
 
   Future<ProcessResult> _runProcess({
@@ -449,6 +509,35 @@ class LocalMiseProcessService implements MiseProcessService {
     }
 
     return details.join('\n');
+  }
+
+  String _normalizeWindowsPathEntry(String value) {
+    var normalized = value.trim().replaceAll('/', '\\');
+    while (normalized.endsWith('\\')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    return normalized.toLowerCase();
+  }
+
+  String _windowsShimPathFixCommand(String shimPath) {
+    final escapedShimPath = shimPath.replaceAll("'", "''");
+    return r'''$shimDir = ''' "'$escapedShimPath'" r'''
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$entries = @()
+if ($userPath) {
+  $entries += $userPath -split ';'
+}
+if ($entries -notcontains $shimDir) {
+  $entries += $shimDir
+  [Environment]::SetEnvironmentVariable(
+    'Path',
+    (($entries | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique) -join ';'),
+    'User'
+  )
+}
+mise reshim
+Write-Host '已写入用户 PATH，请关闭并重新打开 cmd / PowerShell 后再执行工具命令。'
+''';
   }
 }
 

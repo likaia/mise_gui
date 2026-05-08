@@ -5,12 +5,22 @@ import 'package:mise_gui/services/mise_process_service.dart';
 import 'package:mise_gui/services/mise_query_service.dart';
 
 class _FakeProcessService implements MiseProcessService {
-  const _FakeProcessService(this.result);
+  const _FakeProcessService(
+    this.result, {
+    this.windowsShimPathStatus = const WindowsShimPathStatus(
+      source: WindowsShimPathSource.unsupported,
+    ),
+  });
 
   final ShellEnvironmentLoadResult result;
+  final WindowsShimPathStatus windowsShimPathStatus;
 
   @override
   Future<ShellEnvironmentLoadResult> inspectShellEnvironment() async => result;
+
+  @override
+  Future<WindowsShimPathStatus> inspectWindowsShimPath() async =>
+      windowsShimPathStatus;
 
   @override
   Future<MiseCommandResult> run(MiseCommandRequest request) {
@@ -177,6 +187,55 @@ void main() {
     expect(
       hydrated.remoteVersions.map((version) => version.version).first,
       'temurin-21.0.11+9.0.LTS',
+    );
+  });
+
+  test('adds a windows shim PATH notice when shims are missing from PATH', () async {
+    const service = LiveMiseCliService(
+      queryService: _JavaRemoteQueryService(),
+      processService: _FakeProcessService(
+        ShellEnvironmentLoadResult(source: ShellEnvironmentSource.unsupported),
+        windowsShimPathStatus: WindowsShimPathStatus(
+          source: WindowsShimPathSource.missing,
+          shimPath: r'C:\Users\demo\AppData\Local\mise\shims',
+          detail: '当前系统 PATH 里还没有 mise shims 目录。',
+          commandPreview: r'$shimDir = "C:\Users\demo\AppData\Local\mise\shims"',
+        ),
+      ),
+    );
+
+    const tool = ToolRecord(
+      id: 'go',
+      name: 'Go',
+      category: 'Go 版本管理',
+      description: 'Go toolchain',
+      activeVersion: '1.26.3',
+      requestedVersion: '1.26',
+      source: '全局',
+      strategy: 'global',
+      latestStableVersion: '待同步',
+      latestPreviewVersion: '待同步',
+      installedVersions: [],
+      remoteVersions: [],
+      projectImpacts: [],
+      quickActions: [],
+      commandPreview: 'mise current go',
+      level: HealthLevel.info,
+      remoteState: ToolRemoteState.pending,
+    );
+
+    final hydrated = await service.hydrateToolRemoteState(tool);
+
+    expect(
+      hydrated.notices.any((notice) => notice.title.contains('Windows 终端尚未接入 mise shims')),
+      isTrue,
+    );
+    expect(
+      hydrated.notices.any(
+        (notice) =>
+            notice.commandPreview?.contains(r'mise\shims') ?? false,
+      ),
+      isTrue,
     );
   });
 }
