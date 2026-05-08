@@ -2,9 +2,11 @@ name: CI
 
 on:
   pull_request:
+    branches:
+      - master
   push:
     branches:
-      - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -118,6 +120,9 @@ jobs:
 
       - name: Install Dart dependencies
         run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
 
       - name: Build desktop app
         run: flutter build ${{ matrix.target }} --release
