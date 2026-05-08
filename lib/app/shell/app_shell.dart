@@ -183,6 +183,9 @@ class _Sidebar extends ConsumerWidget {
       width: sidebarWidth,
       child: AppPanel(
         padding: EdgeInsets.all(sidebarPadding),
+        radius: 24,
+        backgroundAlpha: 0.72,
+        borderAlpha: 0.48,
         child: LayoutBuilder(
           builder: (context, constraints) {
             return Column(
@@ -200,11 +203,24 @@ class _Sidebar extends ConsumerWidget {
                       children: [
                         Container(
                           width: double.infinity,
-                          padding: EdgeInsets.all(brandPadding),
+                          padding: EdgeInsets.fromLTRB(
+                            brandPadding,
+                            brandPadding,
+                            brandPadding,
+                            expanded ? 14 : brandPadding,
+                          ),
                           decoration: BoxDecoration(
-                            gradient: colors.heroGradient,
-                            borderRadius: BorderRadius.circular(22),
-                            border: Border.all(color: colors.borderStrong),
+                            gradient: expanded
+                                ? LinearGradient(
+                                    colors: [
+                                      colors.panelRaised.withValues(alpha: 0.2),
+                                      colors.accent.withValues(alpha: 0.07),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
+                                : null,
+                            borderRadius: BorderRadius.circular(18),
                           ),
                           child: expanded
                               ? Column(
@@ -295,10 +311,10 @@ class _Sidebar extends ConsumerWidget {
                                   child: _BrandBadge(size: compactBrandSize),
                                 ),
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 20),
                         for (final destination in AppDestination.values)
                           Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.only(bottom: 8),
                             child: _SidebarDestination(
                               destination: destination,
                               expanded: expanded,
@@ -404,12 +420,12 @@ class _SidebarDestination extends StatelessWidget {
         color: selected
             ? colors.accent.withValues(alpha: 0.14)
             : locked
-            ? colors.panelMuted.withValues(alpha: 0.46)
+            ? colors.panelMuted.withValues(alpha: 0.34)
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         child: InkWell(
           onTap: locked ? null : onTap,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
           hoverColor: locked ? Colors.transparent : colors.hover,
           child: Padding(
             padding: EdgeInsets.symmetric(
@@ -429,15 +445,15 @@ class _SidebarDestination extends StatelessWidget {
                     color: selected
                         ? colors.accent.withValues(alpha: 0.18)
                         : locked
-                        ? colors.panel.withValues(alpha: 0.92)
-                        : colors.panelRaised,
-                    borderRadius: BorderRadius.circular(14),
+                        ? colors.panel.withValues(alpha: 0.62)
+                        : colors.panelRaised.withValues(alpha: 0.58),
+                    borderRadius: BorderRadius.circular(13),
                     border: Border.all(
                       color: selected
                           ? colors.accent.withValues(alpha: 0.45)
                           : locked
-                          ? colors.borderStrong.withValues(alpha: 0.36)
-                          : colors.border,
+                          ? colors.borderStrong.withValues(alpha: 0.26)
+                          : colors.border.withValues(alpha: 0.34),
                     ),
                   ),
                   child: Icon(
@@ -500,9 +516,14 @@ class _ContentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppPanel(
-      padding: EdgeInsets.zero,
-      child: ClipRRect(borderRadius: BorderRadius.circular(28), child: child),
+    final colors = AppTheme.colorsOf(context);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: ColoredBox(
+        color: colors.panel.withValues(alpha: 0.24),
+        child: child,
+      ),
     );
   }
 }
@@ -595,14 +616,14 @@ class _ToolbarGlassPanel extends StatelessWidget {
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [
-                colors.panelRaised.withValues(alpha: isDark ? 0.72 : 0.8),
-                colors.backgroundSoft.withValues(alpha: isDark ? 0.62 : 0.68),
+                colors.panelRaised.withValues(alpha: isDark ? 0.58 : 0.76),
+                colors.backgroundSoft.withValues(alpha: isDark ? 0.48 : 0.62),
               ],
             ),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: colors.borderStrong.withValues(
-                alpha: isDark ? 0.48 : 0.24,
+                alpha: isDark ? 0.34 : 0.22,
               ),
             ),
             boxShadow: [
@@ -655,7 +676,7 @@ class _RuntimePill extends StatelessWidget {
       decoration: BoxDecoration(
         color: colors.panelRaised.withValues(alpha: 0.3),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: colors.borderStrong.withValues(alpha: 0.28)),
+        border: Border.all(color: colors.borderStrong.withValues(alpha: 0.2)),
       ),
       child: Text(
         label,

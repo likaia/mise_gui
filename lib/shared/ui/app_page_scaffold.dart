@@ -53,41 +53,27 @@ class _AppPageScaffoldState extends State<AppPageScaffold> {
         mainAxisMargin: 16,
         child: SingleChildScrollView(
           controller: _scrollController,
-          padding: const EdgeInsets.fromLTRB(24, 24, 34, 24),
+          padding: const EdgeInsets.fromLTRB(28, 28, 38, 28),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      colors.panelRaised.withValues(alpha: 0.26),
-                      colors.panel.withValues(alpha: 0.08),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: colors.border.withValues(alpha: 0.55),
-                  ),
-                ),
-                child: Wrap(
-                  spacing: 18,
-                  runSpacing: 18,
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 720),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.title,
-                            style: Theme.of(context).textTheme.headlineLarge,
-                          ),
-                          const SizedBox(height: 10),
+              Wrap(
+                spacing: 18,
+                runSpacing: 16,
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title,
+                          style: Theme.of(context).textTheme.headlineLarge,
+                        ),
+                        if (widget.description.trim().isNotEmpty) ...[
+                          const SizedBox(height: 8),
                           Text(
                             widget.description,
                             style: TextStyle(
@@ -97,26 +83,20 @@ class _AppPageScaffoldState extends State<AppPageScaffold> {
                             ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
-                    if (widget.actions.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: colors.backgroundSoft.withValues(alpha: 0.4),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: colors.border),
-                        ),
-                        child: Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children: widget.actions,
-                        ),
-                      ),
-                  ],
+                  ),
+                  if (widget.actions.isNotEmpty)
+                    Wrap(spacing: 12, runSpacing: 12, children: widget.actions),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 22, bottom: 26),
+                child: Divider(
+                  height: 1,
+                  color: colors.border.withValues(alpha: 0.42),
                 ),
               ),
-              const SizedBox(height: 28),
               widget.child,
             ],
           ),

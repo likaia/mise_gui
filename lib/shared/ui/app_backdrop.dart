@@ -11,9 +11,7 @@ class AppBackdrop extends StatelessWidget {
     final colors = AppTheme.colorsOf(context);
 
     return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: colors.backdropGradient,
-      ),
+      decoration: BoxDecoration(gradient: colors.backdropGradient),
       child: CustomPaint(
         painter: _BackdropPainter(colors),
         child: const SizedBox.expand(),
@@ -30,7 +28,7 @@ class _BackdropPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final gridPaint = Paint()
-      ..color = colors.border.withValues(alpha: 0.24)
+      ..color = colors.border.withValues(alpha: 0.13)
       ..strokeWidth = 1;
 
     const gap = 40.0;
@@ -47,7 +45,7 @@ class _BackdropPainter extends CustomPainter {
         center: Offset(size.width * 0.85, size.height * 0.18),
         radius: 180,
       ),
-      color: colors.accent.withValues(alpha: 0.12),
+      color: colors.accent.withValues(alpha: 0.08),
     );
     _paintGlow(
       canvas,
@@ -55,10 +53,11 @@ class _BackdropPainter extends CustomPainter {
         center: Offset(size.width * 0.15, size.height * 0.82),
         radius: 220,
       ),
-      color: colors.info.withValues(alpha: 0.12),
+      color: colors.info.withValues(alpha: 0.08),
     );
 
-    final markerPaint = Paint()..color = colors.textMuted.withValues(alpha: 0.18);
+    final markerPaint = Paint()
+      ..color = colors.textMuted.withValues(alpha: 0.1);
     for (int i = 0; i < 12; i++) {
       final dx = size.width * (0.08 + (i * 0.07));
       final dy = size.height * (0.14 + math.sin(i.toDouble()) * 0.02);

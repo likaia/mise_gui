@@ -191,7 +191,7 @@ class _DashboardOverview extends StatelessWidget {
     return Column(
       children: [
         _DashboardMetricGrid(metrics: snapshot.metrics),
-        const SizedBox(height: 18),
+        const SizedBox(height: 28),
         _RecentHistoryPanel(entries: snapshot.recentHistory),
       ],
     );
@@ -207,7 +207,7 @@ class _DashboardMetricGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 18.0;
+        const spacing = 20.0;
         final twoColumns = constraints.maxWidth >= 980;
         final cardWidth = twoColumns
             ? (constraints.maxWidth - spacing) / 2
@@ -238,63 +238,60 @@ class _RecentHistoryPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = AppTheme.colorsOf(context);
 
-    return AppPanel(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('最近活动', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    Text(
-                      '查看最近通过界面执行过的操作结果。',
-                      style: TextStyle(color: colors.textMuted, height: 1.5),
-                    ),
-                  ],
-                ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('最近活动', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(
+                    '查看最近通过界面执行过的操作结果。',
+                    style: TextStyle(color: colors.textMuted, height: 1.5),
+                  ),
+                ],
               ),
-              if (entries.isNotEmpty)
-                TextButton.icon(
-                  onPressed: () => showRecentHistoryDialog(context),
-                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                  label: const Text('查看全部'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          if (entries.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: colors.backgroundSoft.withValues(alpha: 0.78),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: colors.border),
-              ),
-              child: Text(
-                '当前还没有最近操作记录。',
-                style: TextStyle(color: colors.textMuted),
-              ),
-            )
-          else
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: entries.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final entry = entries[index];
-                return RecentHistoryListTile(entry: entry);
-              },
             ),
-        ],
-      ),
+            if (entries.isNotEmpty)
+              TextButton.icon(
+                onPressed: () => showRecentHistoryDialog(context),
+                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                label: const Text('查看全部'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (entries.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            decoration: BoxDecoration(
+              color: colors.panel.withValues(alpha: 0.52),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: colors.border.withValues(alpha: 0.38)),
+            ),
+            child: Text(
+              '当前还没有最近操作记录。',
+              style: TextStyle(color: colors.textMuted),
+            ),
+          )
+        else
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: entries.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 10),
+            itemBuilder: (context, index) {
+              final entry = entries[index];
+              return RecentHistoryListTile(entry: entry);
+            },
+          ),
+      ],
     );
   }
 }
@@ -315,9 +312,12 @@ class _DashboardMetricCard extends StatelessWidget {
     };
 
     return AppPanel(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
+      radius: 20,
+      backgroundAlpha: 0.74,
+      borderAlpha: 0.5,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 184),
+        constraints: const BoxConstraints(minHeight: 178),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -328,7 +328,7 @@ class _DashboardMetricCard extends StatelessWidget {
                   height: 42,
                   decoration: BoxDecoration(
                     color: accent.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(13),
                   ),
                   child: Icon(_iconFor(metric.label), color: accent, size: 20),
                 ),
@@ -341,7 +341,7 @@ class _DashboardMetricCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 26),
             Text(
               metric.value,
               style: Theme.of(
@@ -349,7 +349,7 @@ class _DashboardMetricCard extends StatelessWidget {
               ).textTheme.displaySmall?.copyWith(color: accent, height: 1),
             ),
             if (metric.caption.trim().isNotEmpty) ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               Text(
                 metric.caption,
                 style: TextStyle(
