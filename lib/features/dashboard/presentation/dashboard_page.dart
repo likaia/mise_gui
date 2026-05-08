@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mise_gui/app/router/app_destination.dart';
 import 'package:mise_gui/app/theme/app_theme.dart';
 import 'package:mise_gui/features/dashboard/application/dashboard_provider.dart';
 import 'package:mise_gui/models/app_models.dart';
@@ -307,6 +309,7 @@ class _DashboardMetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = AppTheme.colorsOf(context);
+    final destination = _destinationFor(metric.label);
     final accent = switch (metric.level) {
       HealthLevel.healthy => colors.accent,
       HealthLevel.info => colors.info,
@@ -314,7 +317,8 @@ class _DashboardMetricCard extends StatelessWidget {
       HealthLevel.critical => colors.danger,
     };
 
-    return AppPanel(
+    final panel = AppPanel(
+      key: _keyFor(metric.label),
       padding: const EdgeInsets.all(20),
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 184),
@@ -339,6 +343,12 @@ class _DashboardMetricCard extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
+                if (destination != null)
+                  Icon(
+                    Icons.arrow_forward_rounded,
+                    color: colors.textMuted,
+                    size: 20,
+                  ),
               ],
             ),
             const SizedBox(height: 24),
@@ -363,6 +373,49 @@ class _DashboardMetricCard extends StatelessWidget {
         ),
       ),
     );
+
+    if (destination == null) {
+      return panel;
+    }
+
+    return Tooltip(
+      message: '打开${destination.description}',
+      child: Semantics(
+        button: true,
+        label: '打开${metric.label}',
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(28),
+          child: InkWell(
+            onTap: () => context.go(destination.path),
+            borderRadius: BorderRadius.circular(28),
+            child: panel,
+          ),
+        ),
+      ),
+    );
+  }
+
+  AppDestination? _destinationFor(String label) {
+    switch (label) {
+      case '已装工具':
+        return AppDestination.tools;
+      case '项目覆盖':
+        return AppDestination.projects;
+      default:
+        return null;
+    }
+  }
+
+  Key? _keyFor(String label) {
+    switch (label) {
+      case '已装工具':
+        return const ValueKey('dashboard-metric-tools');
+      case '项目覆盖':
+        return const ValueKey('dashboard-metric-projects');
+      default:
+        return null;
+    }
   }
 
   IconData _iconFor(String label) {

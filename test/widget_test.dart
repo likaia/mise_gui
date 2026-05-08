@@ -71,7 +71,7 @@ class _HasUpdateAppUpdateService implements AppUpdateService {
 }
 
 void main() {
-  testWidgets('loads dashboard shell', (WidgetTester tester) async {
+  Future<void> pumpMiseGuiApp(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1600, 1200);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -96,10 +96,37 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
+  }
+
+  testWidgets('loads dashboard shell', (WidgetTester tester) async {
+    await pumpMiseGuiApp(tester);
 
     expect(find.text('总览'), findsWidgets);
     expect(find.text('工具'), findsWidgets);
     expect(find.text('项目'), findsWidgets);
+  });
+
+  testWidgets('dashboard installed tools metric opens tools tab', (
+    WidgetTester tester,
+  ) async {
+    await pumpMiseGuiApp(tester);
+
+    await tester.tap(find.byKey(const ValueKey('dashboard-metric-tools')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('工具版本'), findsOneWidget);
+  });
+
+  testWidgets('dashboard project coverage metric opens projects tab', (
+    WidgetTester tester,
+  ) async {
+    await pumpMiseGuiApp(tester);
+
+    await tester.tap(find.byKey(const ValueKey('dashboard-metric-projects')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('项目覆盖'), findsWidgets);
+    expect(find.text('管理扫描目录，只显示覆盖了全局版本的项目和版本差异。'), findsOneWidget);
   });
 
   testWidgets('shows install guidance when mise is unavailable', (
