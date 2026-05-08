@@ -6,6 +6,7 @@ class MainFlutterWindow: NSWindow {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     let defaultWindowSize = NSSize(width: 1510, height: 870)
+    let minimumWindowSize = NSSize(width: 960, height: 640)
 
     self.contentViewController = flutterViewController
 
@@ -14,8 +15,8 @@ class MainFlutterWindow: NSWindow {
       let horizontalMargin: CGFloat = 80
       let verticalMargin: CGFloat = 80
       let size = NSSize(
-        width: min(defaultWindowSize.width, max(visibleFrame.width - horizontalMargin, 960)),
-        height: min(defaultWindowSize.height, max(visibleFrame.height - verticalMargin, 640))
+        width: min(defaultWindowSize.width, max(visibleFrame.width - horizontalMargin, minimumWindowSize.width)),
+        height: min(defaultWindowSize.height, max(visibleFrame.height - verticalMargin, minimumWindowSize.height))
       )
       nextFrame.size = size
       nextFrame.origin.x = max(
@@ -30,7 +31,7 @@ class MainFlutterWindow: NSWindow {
       nextFrame.size = defaultWindowSize
     }
     self.setFrame(nextFrame, display: true)
-    minSize = nextFrame.size
+    minSize = minimumWindowSize
 
     titleVisibility = .hidden
     titlebarAppearsTransparent = true

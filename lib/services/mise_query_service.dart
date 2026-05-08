@@ -3,6 +3,11 @@ import 'dart:convert';
 
 import 'package:mise_gui/services/mise_process_service.dart';
 
+const String _shellCommandStartMarker =
+    '__MISE_GUI_SHELL_COMMAND_OUTPUT_START__';
+const String _shellCommandEndMarker =
+    '__MISE_GUI_SHELL_COMMAND_OUTPUT_END__';
+
 class MiseSourceRef {
   const MiseSourceRef({required this.type, this.path});
 
@@ -74,8 +79,22 @@ class MiseResolvedExecutableRef {
   bool get isResolved => exitCode == 0 && resolvedPath != null;
 
   String? get resolvedPath {
-    final value = stdout.trim();
-    return value.isEmpty ? null : value;
+    final lines = const LineSplitter()
+        .convert(stdout)
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (lines.isEmpty) {
+      return null;
+    }
+
+    for (final line in lines.reversed) {
+      if (_looksLikeExecutablePath(line)) {
+        return line;
+      }
+    }
+
+    return lines.last;
   }
 }
 
@@ -283,7 +302,13 @@ class CliMiseQueryService implements MiseQueryService {
     String? workingDirectory,
   }) async {
     final shellPath = _shellPath();
-    final command = 'command -v ${_shellQuote(subject)}';
+    final command = [
+      "printf '%s\\n' ${_shellQuote(_shellCommandStartMarker)}",
+      'command -v ${_shellQuote(subject)}',
+      r'status=$?',
+      "printf '%s\\n' ${_shellQuote(_shellCommandEndMarker)}",
+      r'exit $status',
+    ].join('; ');
 
     final result = await Process.run(
       shellPath,
@@ -295,9 +320,9 @@ class CliMiseQueryService implements MiseQueryService {
 
     return MiseResolvedExecutableRef(
       subject: subject,
-      command: command,
+      command: 'command -v ${_shellQuote(subject)}',
       exitCode: result.exitCode,
-      stdout: (result.stdout ?? '').toString(),
+      stdout: _extractShellCommandOutput((result.stdout ?? '').toString()),
       stderr: (result.stderr ?? '').toString(),
     );
   }
@@ -324,4 +349,37 @@ class CliMiseQueryService implements MiseQueryService {
   String _shellQuote(String value) {
     return "'${value.replaceAll("'", r"'\''")}'";
   }
+}
+
+bool _looksLikeExecutablePath(String value) {
+  return value.startsWith('/') ||
+      value.startsWith(r'\\') ||
+      RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value);
+}
+
+String _extractShellCommandOutput(String rawOutput) {
+  final startIndex = rawOutput.indexOf(_shellCommandStartMarker);
+  if (startIndex == -1) {
+    return rawOutput.trim();
+  }
+
+  final payloadStart = startIndex + _shellCommandStartMarker.length;
+  final endIndex = rawOutput.indexOf(_shellCommandEndMarker, payloadStart);
+  final payload = endIndex == -1
+      ? rawOutput.substring(payloadStart)
+      : rawOutput.substring(payloadStart, endIndex);
+
+  final lines = const LineSplitter()
+      .convert(payload)
+      .map((line) => line.trimRight())
+      .toList();
+
+  while (lines.isNotEmpty && lines.first.trim().isEmpty) {
+    lines.removeAt(0);
+  }
+  while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+    lines.removeLast();
+  }
+
+  return lines.join('\n');
 }

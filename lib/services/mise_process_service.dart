@@ -1,6 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
+const String _shellEnvironmentStartMarker =
+    '__MISE_GUI_SHELL_ENVIRONMENT_START__';
+const String _shellEnvironmentEndMarker =
+    '__MISE_GUI_SHELL_ENVIRONMENT_END__';
+final RegExp _environmentKeyPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
+
 class MiseCommandRequest {
   const MiseCommandRequest({
     required this.arguments,
@@ -53,6 +59,22 @@ class MiseFailureDiagnosis {
 
   final String summary;
   final String detail;
+}
+
+enum ShellEnvironmentSource { shell, desktopFallback, unsupported }
+
+class ShellEnvironmentLoadResult {
+  const ShellEnvironmentLoadResult({
+    required this.source,
+    this.environment,
+    this.detail,
+  });
+
+  final ShellEnvironmentSource source;
+  final Map<String, String>? environment;
+  final String? detail;
+
+  bool get isFromShell => source == ShellEnvironmentSource.shell;
 }
 
 bool isMiseCommandUnavailable(Object error) {
@@ -123,6 +145,7 @@ MiseFailureDiagnosis? diagnoseMiseCommandFailure({
 
 abstract class MiseProcessService {
   Future<MiseCommandResult> run(MiseCommandRequest request);
+  Future<ShellEnvironmentLoadResult> inspectShellEnvironment();
 }
 
 class LocalMiseProcessService implements MiseProcessService {
@@ -187,6 +210,11 @@ class LocalMiseProcessService implements MiseProcessService {
     return result;
   }
 
+  @override
+  Future<ShellEnvironmentLoadResult> inspectShellEnvironment() {
+    return _loadShellEnvironment();
+  }
+
   Future<ProcessResult> _runProcess({
     required MiseCommandRequest request,
     required String executablePath,
@@ -226,7 +254,8 @@ class LocalMiseProcessService implements MiseProcessService {
       return executablePath!;
     }
 
-    final shellEnvironment = await _loadShellEnvironment();
+    final shellEnvironmentResult = await _loadShellEnvironment();
+    final shellEnvironment = shellEnvironmentResult.environment;
     final homeDirectory =
         shellEnvironment?['HOME'] ?? Platform.environment['HOME'];
     final homeCandidates = <String>[
@@ -276,7 +305,8 @@ class LocalMiseProcessService implements MiseProcessService {
 
   Future<Map<String, String>> _buildEnvironment() async {
     final parent = Platform.environment;
-    final shellEnvironment = await _loadShellEnvironment();
+    final shellEnvironmentResult = await _loadShellEnvironment();
+    final shellEnvironment = shellEnvironmentResult.environment;
     final mergedEnvironment = <String, String>{
       ...parent,
       if (shellEnvironment != null) ...shellEnvironment,
@@ -324,50 +354,68 @@ class LocalMiseProcessService implements MiseProcessService {
     return environment;
   }
 
-  Future<Map<String, String>?> _loadShellEnvironment() {
+  Future<ShellEnvironmentLoadResult> _loadShellEnvironment() {
     if (Platform.isWindows) {
-      return Future.value(null);
+      return Future.value(
+        const ShellEnvironmentLoadResult(
+          source: ShellEnvironmentSource.unsupported,
+        ),
+      );
     }
     return _readShellEnvironment();
   }
 
-  Future<Map<String, String>?> _readShellEnvironment() async {
+  Future<ShellEnvironmentLoadResult> _readShellEnvironment() async {
     final parent = Platform.environment;
     final shellPath = _shellPath(configuredShell: parent['SHELL']);
+    final command = [
+      "printf '%s\\0' ${_shellEscape(_shellEnvironmentStartMarker)}",
+      'env -0',
+      r'status=$?',
+      "printf '%s\\0' ${_shellEscape(_shellEnvironmentEndMarker)}",
+      r'exit $status',
+    ].join('; ');
 
     try {
       final result = await Process.run(
         shellPath,
-        const ['-ilc', 'env -0'],
+        ['-ilc', command],
         includeParentEnvironment: true,
         runInShell: false,
       );
 
       if (result.exitCode != 0) {
-        return null;
+        return const ShellEnvironmentLoadResult(
+          source: ShellEnvironmentSource.desktopFallback,
+          detail: '登录 shell 返回了非零退出码，已回退到桌面进程环境。',
+        );
       }
 
       final rawOutput = (result.stdout ?? '').toString();
       if (rawOutput.isEmpty) {
-        return null;
+        return const ShellEnvironmentLoadResult(
+          source: ShellEnvironmentSource.desktopFallback,
+          detail: '登录 shell 没有返回可解析的环境变量，已回退到桌面进程环境。',
+        );
       }
 
-      final environment = <String, String>{};
-      for (final entry in rawOutput.split('\u0000')) {
-        final separatorIndex = entry.indexOf('=');
-        if (separatorIndex <= 0) {
-          continue;
-        }
-        final key = entry.substring(0, separatorIndex);
-        final value = entry.substring(separatorIndex + 1);
-        if (key.isEmpty || value.isEmpty) {
-          continue;
-        }
-        environment[key] = value;
+      final environment = parseShellEnvironmentOutput(rawOutput);
+      if (environment.isEmpty) {
+        return const ShellEnvironmentLoadResult(
+          source: ShellEnvironmentSource.desktopFallback,
+          detail: '未能可靠解析 shell 输出，已回退到桌面进程环境。',
+        );
       }
-      return environment.isEmpty ? null : environment;
+
+      return ShellEnvironmentLoadResult(
+        source: ShellEnvironmentSource.shell,
+        environment: environment,
+      );
     } catch (_) {
-      return null;
+      return const ShellEnvironmentLoadResult(
+        source: ShellEnvironmentSource.desktopFallback,
+        detail: '读取登录 shell 环境时发生异常，已回退到桌面进程环境。',
+      );
     }
   }
 
@@ -402,4 +450,59 @@ class LocalMiseProcessService implements MiseProcessService {
 
     return details.join('\n');
   }
+}
+
+Map<String, String> parseShellEnvironmentOutput(
+  String rawOutput, {
+  String startMarker = _shellEnvironmentStartMarker,
+  String endMarker = _shellEnvironmentEndMarker,
+}) {
+  final payload = _extractDelimitedShellPayload(
+    rawOutput,
+    startMarker: startMarker,
+    endMarker: endMarker,
+  );
+  if (payload.isEmpty) {
+    return const <String, String>{};
+  }
+
+  final environment = <String, String>{};
+  for (final entry in payload.split('\u0000')) {
+    final separatorIndex = entry.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    final key = entry.substring(0, separatorIndex);
+    final value = entry.substring(separatorIndex + 1);
+    if (!_environmentKeyPattern.hasMatch(key) || value.isEmpty) {
+      continue;
+    }
+    environment[key] = value;
+  }
+
+  return environment;
+}
+
+String _extractDelimitedShellPayload(
+  String rawOutput, {
+  required String startMarker,
+  required String endMarker,
+}) {
+  final startIndex = rawOutput.indexOf(startMarker);
+  if (startIndex == -1) {
+    return rawOutput;
+  }
+
+  var payloadStart = startIndex + startMarker.length;
+  while (payloadStart < rawOutput.length &&
+      rawOutput.codeUnitAt(payloadStart) == 0) {
+    payloadStart++;
+  }
+
+  final endIndex = rawOutput.indexOf(endMarker, payloadStart);
+  final payload = endIndex == -1
+      ? rawOutput.substring(payloadStart)
+      : rawOutput.substring(payloadStart, endIndex);
+
+  return payload.replaceFirst(RegExp(r'\u0000+$'), '');
 }

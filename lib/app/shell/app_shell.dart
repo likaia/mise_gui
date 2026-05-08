@@ -174,11 +174,15 @@ class _Sidebar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = AppTheme.colorsOf(context);
     final appVersion = ref.watch(appVersionInfoProvider);
+    final sidebarWidth = expanded ? 280.0 : 112.0;
+    final sidebarPadding = expanded ? 18.0 : 12.0;
+    final brandPadding = expanded ? 16.0 : 10.0;
+    final compactBrandSize = expanded ? 92.0 : 54.0;
 
     return SizedBox(
-      width: expanded ? 280 : 96,
+      width: sidebarWidth,
       child: AppPanel(
-        padding: const EdgeInsets.all(18),
+        padding: EdgeInsets.all(sidebarPadding),
         child: LayoutBuilder(
           builder: (context, constraints) {
             return Column(
@@ -196,7 +200,7 @@ class _Sidebar extends ConsumerWidget {
                       children: [
                         Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.all(16),
+                          padding: EdgeInsets.all(brandPadding),
                           decoration: BoxDecoration(
                             gradient: colors.heroGradient,
                             borderRadius: BorderRadius.circular(22),
@@ -206,7 +210,7 @@ class _Sidebar extends ConsumerWidget {
                               ? Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const _BrandBadge(),
+                                    const _BrandBadge(size: 92),
                                     const SizedBox(height: 16),
                                     const Text(
                                       'Mise GUI',
@@ -287,7 +291,9 @@ class _Sidebar extends ConsumerWidget {
                                     ],
                                   ],
                                 )
-                              : const Center(child: _BrandBadge()),
+                              : Center(
+                                  child: _BrandBadge(size: compactBrandSize),
+                                ),
                         ),
                         const SizedBox(height: 18),
                         for (final destination in AppDestination.values)
@@ -309,6 +315,7 @@ class _Sidebar extends ConsumerWidget {
                 const SizedBox(height: 16),
                 _SidebarFooter(
                   expanded: expanded,
+                  compactWidth: constraints.maxWidth,
                   versionLabel: appVersion.maybeWhen(
                     data: (value) => value.shortLabel,
                     orElse: () => 'v1.0.0',
@@ -324,9 +331,14 @@ class _Sidebar extends ConsumerWidget {
 }
 
 class _SidebarFooter extends StatelessWidget {
-  const _SidebarFooter({required this.expanded, required this.versionLabel});
+  const _SidebarFooter({
+    required this.expanded,
+    required this.compactWidth,
+    required this.versionLabel,
+  });
 
   final bool expanded;
+  final double compactWidth;
   final String versionLabel;
 
   @override
@@ -339,7 +351,29 @@ class _SidebarFooter extends StatelessWidget {
     }
 
     return Center(
-      child: StatusBadge(label: versionLabel, level: HealthLevel.info),
+      child: Container(
+        width: compactWidth,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppTheme.colorsOf(context).info.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: AppTheme.colorsOf(context).info.withValues(alpha: 0.35),
+          ),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            versionLabel,
+            maxLines: 1,
+            style: TextStyle(
+              color: AppTheme.colorsOf(context).info,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -379,7 +413,7 @@ class _SidebarDestination extends StatelessWidget {
           hoverColor: locked ? Colors.transparent : colors.hover,
           child: Padding(
             padding: EdgeInsets.symmetric(
-              horizontal: expanded ? 14 : 10,
+              horizontal: expanded ? 14 : 8,
               vertical: 14,
             ),
             child: Row(
@@ -389,8 +423,8 @@ class _SidebarDestination extends StatelessWidget {
               children: [
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 220),
-                  width: 42,
-                  height: 42,
+                  width: expanded ? 42 : 40,
+                  height: expanded ? 42 : 40,
                   decoration: BoxDecoration(
                     color: selected
                         ? colors.accent.withValues(alpha: 0.18)
@@ -589,7 +623,9 @@ class _ToolbarGlassPanel extends StatelessWidget {
 }
 
 class _BrandBadge extends StatelessWidget {
-  const _BrandBadge();
+  const _BrandBadge({required this.size});
+
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -597,8 +633,8 @@ class _BrandBadge extends StatelessWidget {
       borderRadius: BorderRadius.circular(24),
       child: SvgPicture.asset(
         'assets/branding/mise_gui_logo.svg',
-        width: 92,
-        height: 92,
+        width: size,
+        height: size,
         fit: BoxFit.cover,
       ),
     );
