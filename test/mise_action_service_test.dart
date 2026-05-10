@@ -21,6 +21,11 @@ class _FakeProcessService implements MiseProcessService {
 
   @override
   Future<MiseCommandResult> run(MiseCommandRequest request) => _run(request);
+
+  @override
+  Future<String> resolveExecutablePath() {
+    throw UnimplementedError();
+  }
 }
 
 void main() {

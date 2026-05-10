@@ -26,6 +26,11 @@ class _FakeProcessService implements MiseProcessService {
   Future<MiseCommandResult> run(MiseCommandRequest request) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<String> resolveExecutablePath() {
+    throw UnimplementedError();
+  }
 }
 
 class _FakeQueryService implements MiseQueryService {

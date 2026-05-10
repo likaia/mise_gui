@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mise_gui/app/router/app_destination.dart';
+import 'package:mise_gui/app/bootstrap/dependencies.dart';
 import 'package:mise_gui/app/theme/app_theme.dart';
 import 'package:mise_gui/features/dashboard/application/dashboard_provider.dart';
 import 'package:mise_gui/models/app_models.dart';
+import 'package:mise_gui/services/mise_self_update_service.dart';
 import 'package:mise_gui/services/mise_process_service.dart';
 import 'package:mise_gui/shared/ui/app_page_scaffold.dart';
 import 'package:mise_gui/shared/ui/app_panel.dart';
@@ -194,6 +196,8 @@ class _DashboardOverview extends StatelessWidget {
       children: [
         _DashboardMetricGrid(metrics: snapshot.metrics),
         const SizedBox(height: 28),
+        const _MiseSelfUpdatePanel(),
+        const SizedBox(height: 28),
         _RecentHistoryPanel(entries: snapshot.recentHistory),
       ],
     );
@@ -329,6 +333,435 @@ class _MetricWrap extends StatelessWidget {
             child: _DashboardMetricCard(metric: metric),
           ),
       ],
+    );
+  }
+}
+
+class _MiseSelfUpdatePanel extends ConsumerStatefulWidget {
+  const _MiseSelfUpdatePanel();
+
+  @override
+  ConsumerState<_MiseSelfUpdatePanel> createState() =>
+      _MiseSelfUpdatePanelState();
+}
+
+class _MiseSelfUpdatePanelState extends ConsumerState<_MiseSelfUpdatePanel> {
+  MiseSelfUpdateInfo? _updateInfo;
+  var _checking = false;
+  var _updating = false;
+  final List<String> _logs = [];
+
+  Future<void> _checkForUpdate({bool preserveLogs = false}) async {
+    if (_checking || _updating) {
+      return;
+    }
+    setState(() {
+      _checking = true;
+      if (!preserveLogs) {
+        _logs.clear();
+      }
+    });
+
+    try {
+      final info = await ref
+          .read(miseSelfUpdateServiceProvider)
+          .checkForUpdate();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _updateInfo = info;
+      });
+      _showFeedback(
+        info.updateAvailable
+            ? '发现 mise ${info.latestVersion} 可用。'
+            : 'mise 已是最新版本。',
+      );
+    } catch (error) {
+      _showFeedback('检查 mise 更新失败，请稍后重试。');
+      if (mounted) {
+        setState(() {
+          _logs
+            ..clear()
+            ..add(error.toString());
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _checking = false);
+      }
+    }
+  }
+
+  Future<void> _runSelfUpdate() async {
+    final info = _updateInfo;
+    if (info == null || _updating) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('升级 mise'),
+        content: Text(
+          '将执行 `${info.commandPreview}`，从 ${info.currentVersion} 升级到 ${info.latestVersion}。'
+          '\n\n已检测到安装来源：${info.installSourceLabel}。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('开始升级'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _updating = true;
+      _logs
+        ..clear()
+        ..add('\$ ${info.commandPreview}');
+    });
+
+    final stopwatch = Stopwatch()..start();
+    var shouldRefreshAfterUpdate = false;
+    try {
+      final result = await ref
+          .read(miseSelfUpdateServiceProvider)
+          .selfUpdate(
+            info: info,
+            onOutput: (chunk) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _appendLogs(chunk.text);
+              });
+            },
+          );
+      stopwatch.stop();
+      await ref
+          .read(historyServiceProvider)
+          .appendEntry(
+            HistoryEntry(
+              command: info.commandPreview,
+              timestamp: _formatNow(),
+              detail: result.isSuccess
+                  ? '已通过界面执行 ${info.commandPreview}。'
+                  : '${info.commandPreview} 执行失败。',
+              level: result.isSuccess
+                  ? HealthLevel.healthy
+                  : HealthLevel.warning,
+              status: result.isSuccess
+                  ? HistoryStatus.success
+                  : HistoryStatus.failure,
+              exitCode: result.exitCode,
+              durationMs: stopwatch.elapsedMilliseconds,
+              stdout: result.stdout,
+              stderr: result.stderr,
+              stdoutSnippet: result.stdoutSnippet,
+              stderrSnippet: result.stderrSnippet,
+            ),
+          );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _appendLogs('exit ${result.exitCode}');
+      });
+      _showFeedback(result.isSuccess ? 'mise 升级完成。' : 'mise 升级失败，已记录详情。');
+      ref.invalidate(dashboardProvider);
+      if (result.isSuccess) {
+        shouldRefreshAfterUpdate = true;
+      }
+    } catch (error) {
+      stopwatch.stop();
+      await ref
+          .read(historyServiceProvider)
+          .appendEntry(
+            HistoryEntry(
+              command: info.commandPreview,
+              timestamp: _formatNow(),
+              detail: 'mise self-update 执行异常。',
+              level: HealthLevel.warning,
+              status: HistoryStatus.failure,
+              exitCode: -1,
+              durationMs: stopwatch.elapsedMilliseconds,
+              stderr: error.toString(),
+              stderrSnippet: error.toString(),
+            ),
+          );
+      if (mounted) {
+        setState(() {
+          _appendLogs(error.toString());
+        });
+        _showFeedback('mise 升级异常，已记录详情。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _updating = false);
+        if (shouldRefreshAfterUpdate) {
+          unawaited(_checkForUpdate(preserveLogs: true));
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final info = _updateInfo;
+    final updateAvailable = info?.updateAvailable ?? false;
+    final accent = updateAvailable ? colors.warning : colors.info;
+
+    return AppPanel(
+      padding: const EdgeInsets.all(22),
+      radius: 20,
+      backgroundAlpha: 0.74,
+      borderAlpha: 0.5,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(Icons.system_update_alt_rounded, color: accent),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'mise 本体更新',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _statusText(info),
+                      style: TextStyle(color: colors.textMuted, height: 1.45),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _checking || _updating ? null : _checkForUpdate,
+                    icon: _checking
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh_rounded),
+                    label: Text(_checking ? '检查中...' : '检查更新'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: updateAvailable && !_checking && !_updating
+                        ? _runSelfUpdate
+                        : null,
+                    icon: _updating
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.upgrade_rounded),
+                    label: Text(_updating ? '升级中...' : '升级 mise'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (info != null) ...[
+            const SizedBox(height: 16),
+            _MiseUpdateVersionRow(info: info),
+          ],
+          if (_logs.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _MiseSelfUpdateLog(logs: _logs),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _statusText(MiseSelfUpdateInfo? info) {
+    if (_updating) {
+      return '正在执行升级命令，请保持应用打开。';
+    }
+    if (info == null) {
+      return '检查当前 mise CLI 版本，并对比 GitHub 最新 release。';
+    }
+    if (info.updateAvailable) {
+      return '发现 ${info.tagName}，将通过 ${info.installSourceLabel} 在 GUI 内执行升级。';
+    }
+    return '当前 mise 已是最新版本。';
+  }
+
+  void _appendLogs(String output) {
+    final lines = output
+        .replaceAll('\r', '\n')
+        .split('\n')
+        .map((line) => line.trimRight())
+        .where((line) => line.isNotEmpty);
+    _logs.addAll(lines);
+    if (_logs.length > 80) {
+      _logs.removeRange(0, _logs.length - 80);
+    }
+  }
+
+  String _formatNow() {
+    final now = DateTime.now();
+    final hours = now.hour.toString().padLeft(2, '0');
+    final minutes = now.minute.toString().padLeft(2, '0');
+    return '$hours:$minutes';
+  }
+
+  void _showFeedback(String message) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _MiseUpdateVersionRow extends StatelessWidget {
+  const _MiseUpdateVersionRow({required this.info});
+
+  final MiseSelfUpdateInfo info;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        _VersionChip(label: '当前', value: info.currentVersion),
+        _VersionChip(label: '最新', value: info.latestVersion),
+        _VersionChip(label: '来源', value: info.installSourceLabel),
+        _VersionChip(label: '命令', value: info.commandPreview, mono: true),
+        if (!info.updateAvailable)
+          const _VersionChip(label: '状态', value: '无需升级')
+        else if (info.usesPackageManager)
+          Container(
+            constraints: const BoxConstraints(maxWidth: 520),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: colors.panelMuted,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: colors.border),
+            ),
+            child: Text(
+              '检测到包管理器安装，将直接调用系统升级命令。',
+              style: TextStyle(color: colors.textMuted, height: 1.4),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _VersionChip extends StatelessWidget {
+  const _VersionChip({
+    required this.label,
+    required this.value,
+    this.mono = false,
+  });
+
+  final String label;
+  final String value;
+  final bool mono;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: colors.panelMuted,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: TextStyle(color: colors.textMuted)),
+          const SizedBox(width: 8),
+          Text(
+            value,
+            style: TextStyle(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w700,
+              fontFamily: mono ? 'FiraCode' : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiseSelfUpdateLog extends StatelessWidget {
+  const _MiseSelfUpdateLog({required this.logs});
+
+  final List<String> logs;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(maxHeight: 180),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.backgroundDeep.withValues(
+          alpha: Theme.of(context).brightness == Brightness.dark ? 0.42 : 0.06,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.border),
+      ),
+      child: ListView.builder(
+        reverse: true,
+        shrinkWrap: true,
+        itemCount: logs.length,
+        itemBuilder: (context, index) {
+          final line = logs[logs.length - index - 1];
+          return Text(
+            line,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontFamily: 'FiraCode',
+              fontSize: 12,
+              height: 1.4,
+            ),
+          );
+        },
+      ),
     );
   }
 }

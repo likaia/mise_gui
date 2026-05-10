@@ -18,6 +18,7 @@ import 'package:mise_gui/services/mise_action_service.dart';
 import 'package:mise_gui/services/mise_cli_service.dart';
 import 'package:mise_gui/services/mise_process_service.dart';
 import 'package:mise_gui/services/mise_query_service.dart';
+import 'package:mise_gui/services/mise_self_update_service.dart';
 import 'package:mise_gui/services/project_scan_service.dart';
 import 'package:mise_gui/services/scan_directory_service.dart';
 
@@ -100,6 +101,12 @@ final miseQueryServiceProvider = Provider<MiseQueryService>(
 
 final miseActionServiceProvider = Provider<MiseActionService>(
   (ref) => LocalMiseActionService(ref.watch(miseProcessServiceProvider)),
+);
+
+final miseSelfUpdateServiceProvider = Provider<MiseSelfUpdateService>(
+  (ref) => GitHubMiseSelfUpdateService(
+    processService: ref.watch(miseProcessServiceProvider),
+  ),
 );
 
 final miseCliServiceProvider = Provider<MiseCliService>(

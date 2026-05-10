@@ -59,6 +59,11 @@ class _MissingMiseProcessService implements MiseProcessService {
       ),
     );
   }
+
+  @override
+  Future<String> resolveExecutablePath() {
+    throw UnimplementedError();
+  }
 }
 
 class _NoopAppUpdateService implements AppUpdateService {

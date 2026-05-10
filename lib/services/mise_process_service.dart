@@ -173,6 +173,7 @@ MiseFailureDiagnosis? diagnoseMiseCommandFailure({
 
 abstract class MiseProcessService {
   Future<MiseCommandResult> run(MiseCommandRequest request);
+  Future<String> resolveExecutablePath();
   Future<ShellEnvironmentLoadResult> inspectShellEnvironment();
   Future<WindowsShimPathStatus> inspectWindowsShimPath();
 }
@@ -185,6 +186,9 @@ class LocalMiseProcessService implements MiseProcessService {
     '/opt/homebrew/bin/mise',
     '/usr/local/bin/mise',
   ];
+
+  @override
+  Future<String> resolveExecutablePath() => _resolveExecutablePath();
 
   @override
   Future<MiseCommandResult> run(MiseCommandRequest request) async {
