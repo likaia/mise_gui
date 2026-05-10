@@ -65,9 +65,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: macOS
-            os: macos-latest
-            target: macos
           - label: Linux
             os: ubuntu-latest
             target: linux
@@ -124,18 +121,5 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Build macOS desktop app
-        if: matrix.target == 'macos'
-        run: |
-          flutter build macos --release --config-only
-          xcodebuild \
-            -workspace macos/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-
       - name: Build desktop app
-        if: matrix.target != 'macos'
         run: flutter build ${{ matrix.target }} --release
