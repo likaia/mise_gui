@@ -289,7 +289,10 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
         timestamp: _formatNow(),
         detail: success
             ? '已通过界面执行 ${data.title}。'
-            : diagnosis?.detail ?? '${data.title} 执行失败，已保留实际 CLI 和错误输出。',
+            : _appendLockfileCleanupDetail(
+                diagnosis?.detail ?? '${data.title} 执行失败，已保留实际 CLI 和错误输出。',
+                result.lockfileCleanupReport.detail,
+              ),
         level: success ? data.level : HealthLevel.warning,
         status: success ? HistoryStatus.success : HistoryStatus.failure,
         exitCode: result.exitCode,
@@ -336,11 +339,12 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
         ref.invalidate(dashboardProvider);
       }
 
-      snackMessage = success
-          ? '${data.title} 已执行完成。'
-          : diagnosis == null
-          ? '${data.title} 执行失败，已打开错误详情。'
-          : '${data.title} 执行失败：${diagnosis.summary}';
+      snackMessage = _actionSnackMessage(
+        title: data.title,
+        success: success,
+        diagnosis: diagnosis,
+        cleanedLockfiles: result.lockfileCleanupReport.removedPaths.isNotEmpty,
+      );
       if (!success) {
         failureEntryToShow = historyEntry;
       }
@@ -408,6 +412,32 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     final hours = now.hour.toString().padLeft(2, '0');
     final minutes = now.minute.toString().padLeft(2, '0');
     return '$hours:$minutes';
+  }
+
+  String _appendLockfileCleanupDetail(String detail, String? cleanupDetail) {
+    final value = cleanupDetail?.trim();
+    if (value == null || value.isEmpty) {
+      return detail;
+    }
+    return '$detail\n\n$value';
+  }
+
+  String _actionSnackMessage({
+    required String title,
+    required bool success,
+    required MiseFailureDiagnosis? diagnosis,
+    required bool cleanedLockfiles,
+  }) {
+    if (success) {
+      return '$title 已执行完成。';
+    }
+    if (cleanedLockfiles) {
+      return '$title 执行失败，已清理残留锁文件。';
+    }
+    if (diagnosis == null) {
+      return '$title 执行失败，已打开错误详情。';
+    }
+    return '$title 执行失败：${diagnosis.summary}';
   }
 
   String _globalConfigPath() {

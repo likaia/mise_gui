@@ -188,7 +188,7 @@ class LocalMiseProcessService implements MiseProcessService {
         request: request,
         executablePath: resolvedExecutablePath,
         environment: environment,
-      ).timeout(request.timeout);
+      );
     } on ProcessException catch (error) {
       stopwatch.stop();
 
@@ -278,33 +278,95 @@ class LocalMiseProcessService implements MiseProcessService {
     required MiseCommandRequest request,
     required String executablePath,
     required Map<String, String> environment,
-  }) {
+  }) async {
     if (!request.preferShellExecution || Platform.isWindows) {
-      return Process.run(
+      return _runProcessWithTimeout(
         executablePath,
         request.arguments,
         workingDirectory: request.workingDirectory,
         environment: environment,
-        includeParentEnvironment: true,
-        runInShell: false,
+        timeout: request.timeout,
       );
     }
 
     final shellPath = _shellPath(
       configuredShell: environment['SHELL'] ?? Platform.environment['SHELL'],
     );
-    final command = <String>[
-      executablePath,
-      ...request.arguments,
-    ].map(_shellEscape).join(' ');
+    final command =
+        'exec ${<String>[executablePath, ...request.arguments].map(_shellEscape).join(' ')}';
 
-    return Process.run(
+    return _runProcessWithTimeout(
       shellPath,
       ['-ilc', command],
       workingDirectory: request.workingDirectory,
       environment: environment,
+      timeout: request.timeout,
+    );
+  }
+
+  Future<ProcessResult> _runProcessWithTimeout(
+    String executable,
+    List<String> arguments, {
+    required String? workingDirectory,
+    required Map<String, String> environment,
+    required Duration timeout,
+  }) async {
+    final process = await Process.start(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: environment,
       includeParentEnvironment: true,
       runInShell: false,
+    );
+    final stdoutFuture = process.stdout
+        .transform(systemEncoding.decoder)
+        .join();
+    final stderrFuture = process.stderr
+        .transform(systemEncoding.decoder)
+        .join();
+
+    int exitCode;
+    var timedOut = false;
+    try {
+      exitCode = await process.exitCode.timeout(timeout);
+    } on TimeoutException {
+      timedOut = true;
+      process.kill();
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 3));
+      } on TimeoutException {
+        if (Platform.isWindows) {
+          process.kill();
+        } else {
+          process.kill(ProcessSignal.sigkill);
+        }
+        try {
+          await process.exitCode.timeout(const Duration(seconds: 1));
+        } on TimeoutException {
+          // The process has been signalled; return a timeout result so callers
+          // can record failure and run recovery hooks.
+        }
+      }
+      exitCode = -1;
+    }
+
+    final stdout = await stdoutFuture;
+    final stderr = await stderrFuture;
+    if (!timedOut) {
+      return ProcessResult(process.pid, exitCode, stdout, stderr);
+    }
+
+    final timeoutMessage =
+        'mise command timed out after ${timeout.inSeconds}s and was terminated.';
+    return ProcessResult(
+      process.pid,
+      exitCode,
+      stdout,
+      [
+        stderr.trim(),
+        timeoutMessage,
+      ].where((item) => item.isNotEmpty).join('\n'),
     );
   }
 
