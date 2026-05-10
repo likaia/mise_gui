@@ -12,6 +12,7 @@ import 'package:mise_gui/services/app_update_service.dart';
 import 'package:mise_gui/services/browser_launcher_service.dart';
 import 'package:mise_gui/services/config_service.dart';
 import 'package:mise_gui/services/config_watch_service.dart';
+import 'package:mise_gui/services/desktop_window_service.dart';
 import 'package:mise_gui/services/history_service.dart';
 import 'package:mise_gui/services/mise_action_service.dart';
 import 'package:mise_gui/services/mise_cli_service.dart';
@@ -64,6 +65,10 @@ final appUpdateServiceProvider = Provider<AppUpdateService>(
 
 final browserLauncherServiceProvider = Provider<BrowserLauncherService>(
   (ref) => const SystemBrowserLauncherService(),
+);
+
+final desktopWindowServiceProvider = Provider<DesktopWindowService>(
+  (ref) => const MethodChannelDesktopWindowService(),
 );
 
 final miseAvailableProvider = FutureProvider<bool>((ref) async {

@@ -2,6 +2,8 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  private var windowChannel: FlutterMethodChannel?
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -46,6 +48,20 @@ class MainFlutterWindow: NSWindow {
       blue: 42.0 / 255.0,
       alpha: 1.0
     )
+
+    windowChannel = FlutterMethodChannel(
+      name: "mise_gui/window",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    windowChannel?.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "toggleMaximize" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+
+      self?.performZoom(nil)
+      result(nil)
+    }
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 

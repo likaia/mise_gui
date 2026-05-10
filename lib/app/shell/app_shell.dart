@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
@@ -42,7 +43,9 @@ class AppShell extends ConsumerWidget {
           backgroundColor: Colors.transparent,
           appBar: compact
               ? AppBar(
-                  title: Text(isMissingMise ? '安装 mise' : destination.label),
+                  title: _WindowChromeDoubleTapRegion(
+                    child: Text(isMissingMise ? '安装 mise' : destination.label),
+                  ),
                   actions: const [
                     Padding(
                       padding: EdgeInsets.only(right: 16),
@@ -145,11 +148,19 @@ class _DesktopChromeBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Align(
-      alignment: Alignment.centerRight,
-      child: Padding(
-        padding: EdgeInsets.only(left: 92),
-        child: _TopMetaRow(compact: false),
+    return const SizedBox(
+      height: 44,
+      child: Stack(
+        children: [
+          Positioned.fill(left: 92, child: _WindowChromeDoubleTapRegion()),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: EdgeInsets.only(left: 92),
+              child: _TopMetaRow(compact: false),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -526,9 +537,34 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Align(
-      alignment: Alignment.centerRight,
-      child: _TopMetaRow(compact: false),
+    return const SizedBox(
+      height: 44,
+      child: Stack(
+        children: [
+          Positioned.fill(child: _WindowChromeDoubleTapRegion()),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _TopMetaRow(compact: false),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WindowChromeDoubleTapRegion extends ConsumerWidget {
+  const _WindowChromeDoubleTapRegion({this.child});
+
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onDoubleTap: () {
+        unawaited(ref.read(desktopWindowServiceProvider).toggleMaximize());
+      },
+      child: child,
     );
   }
 }

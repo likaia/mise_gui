@@ -43,6 +43,53 @@ WindowSize ResolveInitialWindowSize() {
 }
 }  // namespace
 
+static void toggle_window_maximize(GtkWindow* window) {
+  GtkWidget* widget = GTK_WIDGET(window);
+  GdkWindow* gdk_window = gtk_widget_get_window(widget);
+  if (gdk_window == nullptr) {
+    return;
+  }
+
+  GdkWindowState state = gdk_window_get_state(gdk_window);
+  if ((state & GDK_WINDOW_STATE_MAXIMIZED) != 0) {
+    gtk_window_unmaximize(window);
+  } else {
+    gtk_window_maximize(window);
+  }
+}
+
+static void window_method_call_cb(FlMethodChannel* channel,
+                                  FlMethodCall* method_call,
+                                  gpointer user_data) {
+  GtkWindow* window = GTK_WINDOW(user_data);
+  const gchar* method = fl_method_call_get_name(method_call);
+
+  if (g_strcmp0(method, "toggleMaximize") == 0) {
+    toggle_window_maximize(window);
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+
+  g_autoptr(FlMethodResponse) response =
+      FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  fl_method_call_respond(method_call, response, nullptr);
+}
+
+static void setup_window_method_channel(FlView* view, GtkWindow* window) {
+  FlBinaryMessenger* messenger =
+      fl_engine_get_binary_messenger(fl_view_get_engine(view));
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_autoptr(FlMethodChannel) channel =
+      fl_method_channel_new(messenger, "mise_gui/window",
+                            FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      channel, window_method_call_cb, window, nullptr);
+  g_object_set_data_full(G_OBJECT(view), "mise-window-channel",
+                         g_steal_pointer(&channel), g_object_unref);
+}
+
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
@@ -123,6 +170,7 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  setup_window_method_channel(view, window);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
