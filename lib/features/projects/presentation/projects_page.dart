@@ -24,6 +24,59 @@ class ProjectsPage extends ConsumerStatefulWidget {
   ConsumerState<ProjectsPage> createState() => _ProjectsPageState();
 }
 
+class ScanDirectoryRisk {
+  const ScanDirectoryRisk({required this.path, required this.message});
+
+  final String path;
+  final String message;
+}
+
+ScanDirectoryRisk? scanDirectoryRiskForPath(String path) {
+  final normalized = _normalizeRiskPath(path);
+  if (normalized.isEmpty) {
+    return null;
+  }
+
+  final windowsDriveRoot = RegExp(r'^[a-z]:/$').hasMatch(normalized);
+  if (windowsDriveRoot) {
+    return ScanDirectoryRisk(path: path, message: '你选择的是 Windows 磁盘根目录。');
+  }
+
+  final uncRoot = RegExp(r'^//[^/]+/[^/]+$').hasMatch(normalized);
+  if (uncRoot) {
+    return ScanDirectoryRisk(path: path, message: '你选择的是整个网络共享根目录。');
+  }
+
+  if (normalized == '/') {
+    return ScanDirectoryRisk(path: path, message: '你选择的是系统根目录。');
+  }
+
+  if (normalized == '/volumes' ||
+      RegExp(r'^/volumes/[^/]+$').hasMatch(normalized)) {
+    return ScanDirectoryRisk(path: path, message: '你选择的是 macOS 磁盘卷根目录。');
+  }
+
+  final linuxMountRoot =
+      RegExp(r'^/mnt/[^/]+$').hasMatch(normalized) ||
+      RegExp(r'^/media/[^/]+/[^/]+$').hasMatch(normalized) ||
+      RegExp(r'^/run/media/[^/]+/[^/]+$').hasMatch(normalized);
+  if (linuxMountRoot) {
+    return ScanDirectoryRisk(path: path, message: '你选择的是 Linux 挂载磁盘根目录。');
+  }
+
+  return null;
+}
+
+String _normalizeRiskPath(String path) {
+  var normalized = path.trim().replaceAll('\\', '/');
+  while (normalized.length > 1 &&
+      normalized.endsWith('/') &&
+      !RegExp(r'^[A-Za-z]:/$').hasMatch(normalized)) {
+    normalized = normalized.substring(0, normalized.length - 1);
+  }
+  return normalized.toLowerCase();
+}
+
 class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   static const _refreshDebounce = Duration(seconds: 1);
 
@@ -113,6 +166,14 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       return;
     }
 
+    final risk = scanDirectoryRiskForPath(normalizedPath);
+    if (risk != null) {
+      final confirmed = await _confirmRiskyScanDirectory(risk);
+      if (confirmed != true || !mounted) {
+        return;
+      }
+    }
+
     final coveredChildren = existingDirectories
         .where(
           (directory) =>
@@ -133,6 +194,65 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       return;
     }
     _showFeedback('已添加扫描目录。');
+  }
+
+  Future<bool?> _confirmRiskyScanDirectory(ScanDirectoryRisk risk) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final colors = AppTheme.colorsOf(dialogContext);
+        return AlertDialog(
+          title: const Text('确认扫描范围'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(risk.message),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.warning.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colors.warning.withValues(alpha: 0.36),
+                  ),
+                ),
+                child: Text(
+                  risk.path,
+                  style: TextStyle(
+                    color: colors.textPrimary,
+                    fontFamily: 'FiraCode',
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '这会递归扫描大量目录，可能明显拖慢应用或触发系统权限提示。通常建议选择具体的项目工作区，例如 ~/Projects。',
+                style: TextStyle(color: colors.textMuted, height: 1.45),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('重新选择'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: colors.warning,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('仍然添加'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _handleRemoveDirectory(ScanDirectoryRecord directory) async {
