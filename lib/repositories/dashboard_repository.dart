@@ -191,11 +191,7 @@ class DashboardRepository {
       captionParts.add('Build $build');
     }
     captionParts.add(_operatingSystemCaption());
-
-    final cpuModel = await _loadCpuModel();
-    if (cpuModel != null && cpuModel.isNotEmpty) {
-      captionParts.add(cpuModel);
-    }
+    await _appendDeviceDetails(captionParts);
 
     return _OperatingSystemInfo(label: label, caption: captionParts.join('\n'));
   }
@@ -212,11 +208,7 @@ class DashboardRepository {
       captionParts.add('Build ${parsed.build}');
     }
     captionParts.add(_operatingSystemCaption());
-
-    final cpuModel = await _loadCpuModel();
-    if (cpuModel != null && cpuModel.isNotEmpty) {
-      captionParts.add(cpuModel);
-    }
+    await _appendDeviceDetails(captionParts);
 
     final label = switch ((parsed.productName, parsed.kernelVersion)) {
       (final String productName?, _) when productName.isNotEmpty => productName,
@@ -250,6 +242,29 @@ class DashboardRepository {
     );
   }
 
+  Future<void> _appendDeviceDetails(List<String> captionParts) async {
+    final details = await Future.wait<String?>([
+      _loadCpuModel(),
+      _loadMemoryInfo(),
+      _loadDiskInfo(),
+    ]);
+
+    final cpuModel = details[0];
+    if (cpuModel != null && cpuModel.isNotEmpty) {
+      captionParts.add(cpuModel);
+    }
+
+    final memoryInfo = details[1];
+    if (memoryInfo != null && memoryInfo.isNotEmpty) {
+      captionParts.add('内存 $memoryInfo');
+    }
+
+    final diskInfo = details[2];
+    if (diskInfo != null && diskInfo.isNotEmpty) {
+      captionParts.add('磁盘 $diskInfo');
+    }
+  }
+
   Future<String?> _loadCpuModel() async {
     try {
       if (Platform.isMacOS) {
@@ -276,24 +291,136 @@ class DashboardRepository {
 
       if (Platform.isLinux) {
         final cpuInfo = await File('/proc/cpuinfo').readAsString();
-        for (final line in cpuInfo.split('\n')) {
-          if (!line.toLowerCase().startsWith('model name')) {
-            continue;
-          }
-          final separatorIndex = line.indexOf(':');
-          if (separatorIndex == -1) {
-            continue;
-          }
-          final value = line.substring(separatorIndex + 1).trim();
-          if (value.isNotEmpty) {
-            return value;
-          }
+        final value = parseLinuxCpuModel(cpuInfo);
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      }
+
+      if (Platform.isWindows) {
+        final result = await _runWindowsPowerShell(
+          'Get-CimInstance -ClassName Win32_Processor | '
+          'Select-Object -First 1 -ExpandProperty Name',
+        );
+        final value = _firstNonEmptyLine(result?.stdout);
+        if (result?.exitCode == 0 && value != null && value.isNotEmpty) {
+          return value;
         }
       }
     } catch (_) {
       return null;
     }
 
+    return null;
+  }
+
+  Future<String?> _loadMemoryInfo() async {
+    try {
+      if (Platform.isMacOS) {
+        final result = await Process.run('sysctl', const [
+          '-n',
+          'hw.memsize',
+        ], runInShell: false);
+        final totalBytes = int.tryParse(
+          (result.stdout ?? '').toString().trim(),
+        );
+        if (result.exitCode == 0 && totalBytes != null && totalBytes > 0) {
+          return formatByteCount(totalBytes);
+        }
+      }
+
+      if (Platform.isLinux) {
+        final memInfo = await File('/proc/meminfo').readAsString();
+        final totalBytes = parseLinuxMemoryBytes(memInfo);
+        if (totalBytes != null && totalBytes > 0) {
+          return formatByteCount(totalBytes);
+        }
+      }
+
+      if (Platform.isWindows) {
+        final result = await _runWindowsPowerShell(
+          '(Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory',
+        );
+        final totalBytes = int.tryParse(
+          _firstNonEmptyLine(result?.stdout) ?? '',
+        );
+        if (result?.exitCode == 0 && totalBytes != null && totalBytes > 0) {
+          return formatByteCount(totalBytes);
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  Future<String?> _loadDiskInfo() async {
+    try {
+      if (Platform.isMacOS || Platform.isLinux) {
+        final result = await Process.run('df', const [
+          '-P',
+          '-k',
+          '/',
+        ], runInShell: false);
+        if (result.exitCode != 0) {
+          return null;
+        }
+        final diskInfo = parsePosixDfKilobytes(result.stdout);
+        if (diskInfo == null || diskInfo.totalBytes <= 0) {
+          return null;
+        }
+        return '${formatByteCount(diskInfo.availableBytes)} 可用 / '
+            '${formatByteCount(diskInfo.totalBytes)} 总计';
+      }
+
+      if (Platform.isWindows) {
+        final result = await _runWindowsPowerShell(r'''
+$drive = $env:SystemDrive
+if ([string]::IsNullOrWhiteSpace($drive)) { $drive = 'C:' }
+$disk = Get-CimInstance -ClassName Win32_LogicalDisk |
+  Where-Object { $_.DeviceID -eq $drive } |
+  Select-Object -First 1
+if ($null -ne $disk) {
+  "FreeSpace=$($disk.FreeSpace)"
+  "Size=$($disk.Size)"
+}
+''');
+        if (result?.exitCode != 0) {
+          return null;
+        }
+        final values = parseKeyValueOutput(result?.stdout);
+        final freeBytes = int.tryParse(values['FreeSpace'] ?? '');
+        final totalBytes = int.tryParse(values['Size'] ?? '');
+        if (freeBytes == null || totalBytes == null || totalBytes <= 0) {
+          return null;
+        }
+        return '${formatByteCount(freeBytes)} 可用 / '
+            '${formatByteCount(totalBytes)} 总计';
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  Future<ProcessResult?> _runWindowsPowerShell(String command) async {
+    for (final executable in const ['powershell.exe', 'powershell', 'pwsh']) {
+      try {
+        final result = await Process.run(executable, [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          command,
+        ], runInShell: false);
+        if (result.exitCode == 0) {
+          return result;
+        }
+      } on ProcessException {
+        continue;
+      }
+    }
     return null;
   }
 
@@ -364,4 +491,121 @@ class _WindowsOperatingSystemVersion {
   final String? productName;
   final String? kernelVersion;
   final String? build;
+}
+
+String? parseLinuxCpuModel(String cpuInfo) {
+  String? hardware;
+  String? cpuModel;
+  String? processor;
+  for (final line in cpuInfo.split('\n')) {
+    final separatorIndex = line.indexOf(':');
+    if (separatorIndex == -1) {
+      continue;
+    }
+    final key = line.substring(0, separatorIndex).trim().toLowerCase();
+    final value = line.substring(separatorIndex + 1).trim();
+    if (value.isEmpty) {
+      continue;
+    }
+    if (key == 'model name') {
+      return value;
+    }
+    if (key == 'hardware') {
+      hardware ??= value;
+    } else if (key == 'cpu model') {
+      cpuModel ??= value;
+    } else if (key == 'processor' && !RegExp(r'^\d+$').hasMatch(value)) {
+      processor ??= value;
+    }
+  }
+  return hardware ?? cpuModel ?? processor;
+}
+
+int? parseLinuxMemoryBytes(String memInfo) {
+  for (final line in memInfo.split('\n')) {
+    if (!line.startsWith('MemTotal:')) {
+      continue;
+    }
+    final match = RegExp(r'(\d+)').firstMatch(line);
+    final totalKb = int.tryParse(match?.group(1) ?? '');
+    if (totalKb != null && totalKb > 0) {
+      return totalKb * 1024;
+    }
+  }
+  return null;
+}
+
+DiskSpaceInfo? parsePosixDfKilobytes(Object? stdout) {
+  final lines = (stdout ?? '')
+      .toString()
+      .split('\n')
+      .where((line) => line.trim().isNotEmpty)
+      .toList(growable: false);
+  if (lines.length < 2) {
+    return null;
+  }
+
+  final columns = lines[1].trim().split(RegExp(r'\s+'));
+  if (columns.length < 4) {
+    return null;
+  }
+
+  final totalKb = int.tryParse(columns[1]);
+  final availableKb = int.tryParse(columns[3]);
+  if (totalKb == null || availableKb == null || totalKb <= 0) {
+    return null;
+  }
+  return DiskSpaceInfo(
+    availableBytes: availableKb * 1024,
+    totalBytes: totalKb * 1024,
+  );
+}
+
+Map<String, String> parseKeyValueOutput(Object? stdout) {
+  final values = <String, String>{};
+  for (final line in (stdout ?? '').toString().split('\n')) {
+    final trimmed = line.trim();
+    final separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    final key = trimmed.substring(0, separatorIndex).trim();
+    final value = trimmed.substring(separatorIndex + 1).trim();
+    if (key.isNotEmpty && value.isNotEmpty) {
+      values[key] = value;
+    }
+  }
+  return values;
+}
+
+String formatByteCount(int bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var size = bytes.toDouble();
+  var unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  final value = size >= 10 || size % 1 == 0
+      ? size.toStringAsFixed(0)
+      : size.toStringAsFixed(1);
+  return '$value ${units[unitIndex]}';
+}
+
+String? _firstNonEmptyLine(Object? stdout) {
+  for (final line in (stdout ?? '').toString().split('\n')) {
+    final value = line.trim();
+    if (value.isNotEmpty) {
+      return value;
+    }
+  }
+  return null;
+}
+
+class DiskSpaceInfo {
+  const DiskSpaceInfo({required this.availableBytes, required this.totalBytes});
+
+  final int availableBytes;
+  final int totalBytes;
 }
