@@ -13,6 +13,7 @@ class MiseCommandRequest {
     this.timeout = const Duration(seconds: 30),
     this.allowNonZeroExit = false,
     this.preferShellExecution = false,
+    this.onOutput,
   });
 
   final List<String> arguments;
@@ -20,8 +21,18 @@ class MiseCommandRequest {
   final Duration timeout;
   final bool allowNonZeroExit;
   final bool preferShellExecution;
+  final void Function(MiseCommandOutputChunk chunk)? onOutput;
 
   String get displayCommand => ['mise', ...arguments].join(' ');
+}
+
+enum MiseCommandOutputSource { stdout, stderr }
+
+class MiseCommandOutputChunk {
+  const MiseCommandOutputChunk({required this.source, required this.text});
+
+  final MiseCommandOutputSource source;
+  final String text;
 }
 
 class MiseCommandResult {
@@ -286,6 +297,7 @@ class LocalMiseProcessService implements MiseProcessService {
         workingDirectory: request.workingDirectory,
         environment: environment,
         timeout: request.timeout,
+        onOutput: request.onOutput,
       );
     }
 
@@ -301,6 +313,7 @@ class LocalMiseProcessService implements MiseProcessService {
       workingDirectory: request.workingDirectory,
       environment: environment,
       timeout: request.timeout,
+      onOutput: request.onOutput,
     );
   }
 
@@ -310,6 +323,7 @@ class LocalMiseProcessService implements MiseProcessService {
     required String? workingDirectory,
     required Map<String, String> environment,
     required Duration timeout,
+    required void Function(MiseCommandOutputChunk chunk)? onOutput,
   }) async {
     final process = await Process.start(
       executable,
@@ -319,12 +333,32 @@ class LocalMiseProcessService implements MiseProcessService {
       includeParentEnvironment: true,
       runInShell: false,
     );
+    final stdoutBuffer = StringBuffer();
+    final stderrBuffer = StringBuffer();
     final stdoutFuture = process.stdout
         .transform(systemEncoding.decoder)
-        .join();
+        .listen((chunk) {
+          stdoutBuffer.write(chunk);
+          onOutput?.call(
+            MiseCommandOutputChunk(
+              source: MiseCommandOutputSource.stdout,
+              text: chunk,
+            ),
+          );
+        })
+        .asFuture<void>();
     final stderrFuture = process.stderr
         .transform(systemEncoding.decoder)
-        .join();
+        .listen((chunk) {
+          stderrBuffer.write(chunk);
+          onOutput?.call(
+            MiseCommandOutputChunk(
+              source: MiseCommandOutputSource.stderr,
+              text: chunk,
+            ),
+          );
+        })
+        .asFuture<void>();
 
     int exitCode;
     var timedOut = false;
@@ -351,8 +385,10 @@ class LocalMiseProcessService implements MiseProcessService {
       exitCode = -1;
     }
 
-    final stdout = await stdoutFuture;
-    final stderr = await stderrFuture;
+    await stdoutFuture;
+    await stderrFuture;
+    final stdout = stdoutBuffer.toString();
+    final stderr = stderrBuffer.toString();
     if (!timedOut) {
       return ProcessResult(process.pid, exitCode, stdout, stderr);
     }

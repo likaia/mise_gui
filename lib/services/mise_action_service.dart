@@ -292,7 +292,40 @@ class MiseActionResult {
 }
 
 abstract class MiseActionService {
-  Future<MiseActionResult> runScript(String script, {String? workingDirectory});
+  Future<MiseActionResult> runScript(
+    String script, {
+    String? workingDirectory,
+    void Function(MiseActionProgressEvent event)? onProgress,
+  });
+}
+
+enum MiseActionProgressEventType {
+  commandStarted,
+  output,
+  commandFinished,
+  lockfileCleanup,
+}
+
+class MiseActionProgressEvent {
+  const MiseActionProgressEvent({
+    required this.type,
+    required this.command,
+    required this.commandIndex,
+    required this.totalCommands,
+    this.output,
+    this.outputSource,
+    this.exitCode,
+    this.lockfileCleanupReport,
+  });
+
+  final MiseActionProgressEventType type;
+  final String command;
+  final int commandIndex;
+  final int totalCommands;
+  final String? output;
+  final MiseCommandOutputSource? outputSource;
+  final int? exitCode;
+  final MiseLockfileCleanupReport? lockfileCleanupReport;
 }
 
 class LocalMiseActionService implements MiseActionService {
@@ -308,16 +341,15 @@ class LocalMiseActionService implements MiseActionService {
   Future<MiseActionResult> runScript(
     String script, {
     String? workingDirectory,
+    void Function(MiseActionProgressEvent event)? onProgress,
   }) async {
     final commands = <ExecutedMiseCommand>[];
     final lockfileSnapshot = await _lockfileCleaner.capture();
     var lockfileCleanupReport = const MiseLockfileCleanupReport();
+    final scriptCommands = _parseScriptCommands(script);
 
-    for (final rawLine in const LineSplitter().convert(script)) {
-      final line = rawLine.trim();
-      if (line.isEmpty || line.startsWith('#')) {
-        continue;
-      }
+    for (var index = 0; index < scriptCommands.length; index++) {
+      final line = scriptCommands[index];
       if (!line.startsWith('mise ')) {
         throw UnsupportedError(
           'Only mise CLI commands can be executed from GUI actions.',
@@ -325,6 +357,15 @@ class LocalMiseActionService implements MiseActionService {
       }
 
       final arguments = _parseArguments(line.substring(5));
+      final commandIndex = index + 1;
+      onProgress?.call(
+        MiseActionProgressEvent(
+          type: MiseActionProgressEventType.commandStarted,
+          command: line,
+          commandIndex: commandIndex,
+          totalCommands: scriptCommands.length,
+        ),
+      );
       final result = await _processService.run(
         MiseCommandRequest(
           arguments: arguments,
@@ -332,6 +373,18 @@ class LocalMiseActionService implements MiseActionService {
           allowNonZeroExit: true,
           preferShellExecution: true,
           timeout: const Duration(minutes: 6),
+          onOutput: (chunk) {
+            onProgress?.call(
+              MiseActionProgressEvent(
+                type: MiseActionProgressEventType.output,
+                command: line,
+                commandIndex: commandIndex,
+                totalCommands: scriptCommands.length,
+                output: chunk.text,
+                outputSource: chunk.source,
+              ),
+            );
+          },
         ),
       );
 
@@ -344,12 +397,32 @@ class LocalMiseActionService implements MiseActionService {
           duration: result.duration,
         ),
       );
+      onProgress?.call(
+        MiseActionProgressEvent(
+          type: MiseActionProgressEventType.commandFinished,
+          command: line,
+          commandIndex: commandIndex,
+          totalCommands: scriptCommands.length,
+          exitCode: result.exitCode,
+        ),
+      );
 
       if (result.exitCode != 0) {
         lockfileCleanupReport = await _lockfileCleaner.cleanupAfterFailedAction(
           snapshot: lockfileSnapshot,
           output: '${result.stdout}\n${result.stderr}',
         );
+        if (lockfileCleanupReport.hasFindings) {
+          onProgress?.call(
+            MiseActionProgressEvent(
+              type: MiseActionProgressEventType.lockfileCleanup,
+              command: line,
+              commandIndex: commandIndex,
+              totalCommands: scriptCommands.length,
+              lockfileCleanupReport: lockfileCleanupReport,
+            ),
+          );
+        }
         break;
       }
     }
@@ -359,6 +432,14 @@ class LocalMiseActionService implements MiseActionService {
       commands: commands,
       lockfileCleanupReport: lockfileCleanupReport,
     );
+  }
+
+  List<String> _parseScriptCommands(String script) {
+    return const LineSplitter()
+        .convert(script)
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty && !line.startsWith('#'))
+        .toList();
   }
 
   List<String> _parseArguments(String input) {

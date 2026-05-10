@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:mise_gui/app/theme/app_theme.dart';
 import 'package:mise_gui/features/dashboard/application/dashboard_provider.dart';
 import 'package:mise_gui/features/tools/application/tools_provider.dart';
 import 'package:mise_gui/models/app_models.dart';
+import 'package:mise_gui/services/mise_action_service.dart';
 import 'package:mise_gui/services/mise_cli_service.dart';
 import 'package:mise_gui/services/mise_process_service.dart';
 import 'package:mise_gui/services/mise_query_service.dart';
@@ -265,13 +267,21 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
       return;
     }
 
-    _showRunningDialog(context, title: data.title);
+    final progressState = ValueNotifier<_ActionProgressState>(
+      _ActionProgressState.initial(title: data.title, command: data.command),
+    );
+    _showRunningDialog(context, progressState: progressState);
     HistoryEntry? failureEntryToShow;
     String? snackMessage;
     try {
       final result = await ref
           .read(miseActionServiceProvider)
-          .runScript(data.command);
+          .runScript(
+            data.command,
+            onProgress: (event) {
+              progressState.value = progressState.value.apply(event);
+            },
+          );
       if (!mounted || !context.mounted) {
         return;
       }
@@ -366,6 +376,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
       if (rootNavigator.mounted && rootNavigator.canPop()) {
         rootNavigator.pop();
       }
+      progressState.dispose();
     }
 
     if (!mounted || !context.mounted) {
@@ -380,29 +391,16 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     }
   }
 
-  void _showRunningDialog(BuildContext context, {required String title}) {
+  void _showRunningDialog(
+    BuildContext context, {
+    required ValueNotifier<_ActionProgressState> progressState,
+  }) {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => PopScope(
         canPop: false,
-        child: Dialog(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(strokeWidth: 2.4),
-                ),
-                const SizedBox(width: 16),
-                Flexible(child: Text('$title 正在执行，请稍候...')),
-              ],
-            ),
-          ),
-        ),
+        child: _ActionProgressDialog(progressState: progressState),
       ),
     );
   }
@@ -464,6 +462,312 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     }
 
     return toolIds;
+  }
+}
+
+class _ActionProgressState {
+  const _ActionProgressState({
+    required this.title,
+    required this.totalCommands,
+    required this.completedCommands,
+    required this.currentCommandIndex,
+    required this.currentCommand,
+    required this.status,
+    required this.logs,
+  });
+
+  final String title;
+  final int totalCommands;
+  final int completedCommands;
+  final int currentCommandIndex;
+  final String currentCommand;
+  final String status;
+  final List<String> logs;
+
+  factory _ActionProgressState.initial({
+    required String title,
+    required String command,
+  }) {
+    final commands = _parseProgressCommands(command);
+    return _ActionProgressState(
+      title: title,
+      totalCommands: commands.length,
+      completedCommands: 0,
+      currentCommandIndex: 0,
+      currentCommand: commands.isEmpty ? command.trim() : commands.first,
+      status: '准备执行',
+      logs: const [],
+    );
+  }
+
+  double? get progressValue {
+    if (totalCommands == 0) {
+      return null;
+    }
+    final runningOffset = currentCommandIndex > completedCommands ? 0.35 : 0;
+    final value = (completedCommands + runningOffset) / totalCommands;
+    return value.clamp(0, 1).toDouble();
+  }
+
+  String get stepLabel {
+    if (totalCommands == 0) {
+      return '准备中';
+    }
+    final index = currentCommandIndex == 0 ? 1 : currentCommandIndex;
+    return '$index/$totalCommands';
+  }
+
+  _ActionProgressState apply(MiseActionProgressEvent event) {
+    return switch (event.type) {
+      MiseActionProgressEventType.commandStarted => _copyWith(
+        currentCommandIndex: event.commandIndex,
+        currentCommand: event.command,
+        status: '正在执行 ${event.commandIndex}/${event.totalCommands}',
+        logs: _appendLogLines(logs, '\$ ${event.command}'),
+      ),
+      MiseActionProgressEventType.output => _copyWith(
+        currentCommandIndex: event.commandIndex,
+        currentCommand: event.command,
+        status: '正在执行 ${event.commandIndex}/${event.totalCommands}',
+        logs: _appendLogLines(logs, event.output ?? ''),
+      ),
+      MiseActionProgressEventType.commandFinished => _copyWith(
+        completedCommands: event.exitCode == 0
+            ? event.commandIndex
+            : completedCommands,
+        currentCommandIndex: event.commandIndex,
+        currentCommand: event.command,
+        status: event.exitCode == 0
+            ? '已完成 ${event.commandIndex}/${event.totalCommands}'
+            : '执行失败，正在整理结果',
+        logs: _appendLogLines(logs, 'exit ${event.exitCode ?? -1}'),
+      ),
+      MiseActionProgressEventType.lockfileCleanup => _copyWith(
+        status: '已处理异常状态',
+        logs: _appendLogLines(logs, event.lockfileCleanupReport?.detail ?? ''),
+      ),
+    };
+  }
+
+  _ActionProgressState _copyWith({
+    int? completedCommands,
+    int? currentCommandIndex,
+    String? currentCommand,
+    String? status,
+    List<String>? logs,
+  }) {
+    return _ActionProgressState(
+      title: title,
+      totalCommands: totalCommands,
+      completedCommands: completedCommands ?? this.completedCommands,
+      currentCommandIndex: currentCommandIndex ?? this.currentCommandIndex,
+      currentCommand: currentCommand ?? this.currentCommand,
+      status: status ?? this.status,
+      logs: logs ?? this.logs,
+    );
+  }
+
+  static List<String> _parseProgressCommands(String command) {
+    return const LineSplitter()
+        .convert(command)
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty && !line.startsWith('#'))
+        .toList();
+  }
+
+  static List<String> _appendLogLines(List<String> current, String output) {
+    final normalized = output.replaceAll('\r', '\n');
+    final nextLines = normalized
+        .split('\n')
+        .map((line) => line.trimRight())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (nextLines.isEmpty) {
+      return current;
+    }
+
+    final next = <String>[...current, ...nextLines];
+    if (next.length <= 80) {
+      return next;
+    }
+    return next.sublist(next.length - 80);
+  }
+}
+
+class _ActionProgressDialog extends StatelessWidget {
+  const _ActionProgressDialog({required this.progressState});
+
+  final ValueNotifier<_ActionProgressState> progressState;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(28),
+      child: ValueListenableBuilder<_ActionProgressState>(
+        valueListenable: progressState,
+        builder: (context, state, _) {
+          return Semantics(
+            liveRegion: true,
+            label: '${state.title} ${state.status}',
+            child: Container(
+              width: 620,
+              constraints: const BoxConstraints(maxHeight: 560),
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                color: colors.panel,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: colors.borderStrong),
+                boxShadow: [
+                  BoxShadow(
+                    color: colors.backgroundDeep.withValues(alpha: 0.18),
+                    blurRadius: 28,
+                    offset: const Offset(0, 16),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2.3),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              state.title,
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              state.status,
+                              style: TextStyle(color: colors.textMuted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        state.stepLabel,
+                        style: TextStyle(
+                          color: colors.textMuted,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      minHeight: 5,
+                      value: state.progressValue,
+                      backgroundColor: colors.panelMuted,
+                      color: colors.accent,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _CurrentCommandView(command: state.currentCommand),
+                  const SizedBox(height: 14),
+                  Flexible(child: _ActionLogView(logs: state.logs)),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CurrentCommandView extends StatelessWidget {
+  const _CurrentCommandView({required this.command});
+
+  final String command;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: colors.panelMuted,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: colors.border),
+      ),
+      child: Text(
+        command,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: colors.textPrimary,
+          fontFamily: 'monospace',
+          fontSize: 12.5,
+          height: 1.35,
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionLogView extends StatelessWidget {
+  const _ActionLogView({required this.logs});
+
+  final List<String> logs;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Container(
+      height: 260,
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.backgroundDeep.withValues(
+          alpha: Theme.of(context).brightness == Brightness.dark ? 0.42 : 0.06,
+        ),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: colors.border),
+      ),
+      child: logs.isEmpty
+          ? Align(
+              alignment: Alignment.topLeft,
+              child: Text(
+                '等待 mise 输出...',
+                style: TextStyle(color: colors.textMuted),
+              ),
+            )
+          : ListView.builder(
+              reverse: true,
+              itemCount: logs.length,
+              itemBuilder: (context, index) {
+                final line = logs[logs.length - index - 1];
+                return Text(
+                  line,
+                  style: TextStyle(
+                    color: colors.textMuted,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.42,
+                  ),
+                );
+              },
+            ),
+    );
   }
 }
 
