@@ -33,7 +33,7 @@ jobs:
             dist-path: dist/linux/*
             artifact-name: mise-gui-linux
           - label: Windows
-            os: windows-latest
+            os: windows-2022
             flutter-target: windows
             package-command: npm run windows:release:zip
             dist-path: dist/windows/*
@@ -61,7 +61,7 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ steps.flutter-version.outputs.version }}
-          cache: true
+          cache: ${{ runner.os != 'Windows' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

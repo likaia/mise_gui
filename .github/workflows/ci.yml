@@ -69,7 +69,7 @@ jobs:
             os: ubuntu-latest
             target: linux
           - label: Windows
-            os: windows-latest
+            os: windows-2022
             target: windows
 
     steps:
@@ -92,7 +92,7 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ steps.flutter-version.outputs.version }}
-          cache: true
+          cache: ${{ runner.os != 'Windows' }}
 
       - name: Install Linux desktop toolchain
         if: matrix.target == 'linux'
