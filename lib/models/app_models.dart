@@ -437,6 +437,28 @@ class ConfigSectionData {
   final List<ConfigItem> items;
 }
 
+enum ConfigRuntimeSettingType { string, integer, boolean }
+
+class ConfigRuntimeSetting {
+  const ConfigRuntimeSetting({
+    required this.key,
+    required this.label,
+    required this.value,
+    required this.defaultValue,
+    required this.detail,
+    required this.type,
+    required this.isSet,
+  });
+
+  final String key;
+  final String label;
+  final String value;
+  final String defaultValue;
+  final String detail;
+  final ConfigRuntimeSettingType type;
+  final bool isSet;
+}
+
 class ConfigDocumentData {
   const ConfigDocumentData({
     required this.id,
@@ -463,6 +485,26 @@ class ConfigDocumentData {
   }
 }
 
+class ConfigRuntimeSettingsData {
+  const ConfigRuntimeSettingsData({
+    required this.document,
+    required this.settings,
+  });
+
+  final ConfigDocumentData document;
+  final List<ConfigRuntimeSetting> settings;
+}
+
+class ConfigRuntimeSettingsUpdate {
+  const ConfigRuntimeSettingsUpdate({
+    required this.document,
+    required this.values,
+  });
+
+  final ConfigDocumentData document;
+  final Map<String, String?> values;
+}
+
 class ConfigSavePreview {
   const ConfigSavePreview({
     required this.document,
@@ -482,10 +524,15 @@ class ConfigSavePreview {
 }
 
 class ConfigWorkspaceData {
-  const ConfigWorkspaceData({required this.sections, required this.documents});
+  const ConfigWorkspaceData({
+    required this.sections,
+    required this.documents,
+    this.runtimeSettings,
+  });
 
   final List<ConfigSectionData> sections;
   final List<ConfigDocumentData> documents;
+  final ConfigRuntimeSettingsData? runtimeSettings;
 }
 
 class DiagnoseCheck {

@@ -4,6 +4,22 @@ import 'dart:io';
 
 import 'package:mise_gui/models/app_models.dart';
 
+class _RuntimeSettingDefinition {
+  const _RuntimeSettingDefinition({
+    required this.key,
+    required this.label,
+    required this.defaultValue,
+    required this.detail,
+    required this.type,
+  });
+
+  final String key;
+  final String label;
+  final String defaultValue;
+  final String detail;
+  final ConfigRuntimeSettingType type;
+}
+
 abstract class ConfigService {
   Future<ConfigWorkspaceData> fetchWorkspace({
     String? projectPath,
@@ -17,6 +33,10 @@ abstract class ConfigService {
     required String nextContent,
   });
 
+  Future<ConfigSavePreview> previewRuntimeSettingsSave({
+    required ConfigRuntimeSettingsUpdate update,
+  });
+
   Future<void> saveDocument({
     required ConfigDocumentData document,
     required String nextContent,
@@ -24,7 +44,48 @@ abstract class ConfigService {
 }
 
 class LiveConfigService implements ConfigService {
-  const LiveConfigService();
+  const LiveConfigService({String? globalConfigPath})
+    : _globalConfigPathOverride = globalConfigPath;
+
+  final String? _globalConfigPathOverride;
+
+  static const List<_RuntimeSettingDefinition> _runtimeSettingDefinitions = [
+    _RuntimeSettingDefinition(
+      key: 'http_timeout',
+      label: 'HTTP 超时',
+      defaultValue: '30s',
+      detail: '所有 HTTP 请求的超时时间。',
+      type: ConfigRuntimeSettingType.string,
+    ),
+    _RuntimeSettingDefinition(
+      key: 'fetch_remote_versions_timeout',
+      label: '远端版本超时',
+      defaultValue: '20s',
+      detail: '获取远端工具版本列表时的超时时间。',
+      type: ConfigRuntimeSettingType.string,
+    ),
+    _RuntimeSettingDefinition(
+      key: 'http_retries',
+      label: 'HTTP 重试',
+      defaultValue: '3',
+      detail: '网络临时失败时的重试次数，0 表示不重试。',
+      type: ConfigRuntimeSettingType.integer,
+    ),
+    _RuntimeSettingDefinition(
+      key: 'offline',
+      label: '离线模式',
+      defaultValue: 'false',
+      detail: '开启后 mise 不会主动发起 HTTP 请求。',
+      type: ConfigRuntimeSettingType.boolean,
+    ),
+    _RuntimeSettingDefinition(
+      key: 'terminal_progress',
+      label: '终端进度',
+      defaultValue: 'true',
+      detail: '控制 mise 是否输出终端进度指示。',
+      type: ConfigRuntimeSettingType.boolean,
+    ),
+  ];
 
   @override
   Future<ConfigWorkspaceData> fetchWorkspace({
@@ -58,15 +119,14 @@ class LiveConfigService implements ConfigService {
       final projectConfig = resolvedProjectConfigPath == null
           ? null
           : await _readFileIfExists(resolvedProjectConfigPath);
-      final documents = <ConfigDocumentData>[
-        _buildDocument(
-          id: 'global',
-          title: '全局 TOML',
-          path: globalPath,
-          content: globalConfig,
-          description: '查看或编辑 ~/.config/mise/config.toml，这里通常决定全局默认工具链和基础设置。',
-        ),
-      ];
+      final globalDocument = _buildDocument(
+        id: 'global',
+        title: '全局 TOML',
+        path: globalPath,
+        content: globalConfig,
+        description: '查看或编辑 ~/.config/mise/config.toml，这里通常决定全局默认工具链和基础设置。',
+      );
+      final documents = <ConfigDocumentData>[globalDocument];
       if (resolvedProjectConfigPath != null && projectDocumentName != null) {
         documents.add(
           _buildDocument(
@@ -113,7 +173,14 @@ class LiveConfigService implements ConfigService {
         );
       }
 
-      return ConfigWorkspaceData(sections: sections, documents: documents);
+      return ConfigWorkspaceData(
+        sections: sections,
+        documents: documents,
+        runtimeSettings: _buildRuntimeSettings(
+          document: globalDocument,
+          content: globalConfig,
+        ),
+      );
     } catch (error) {
       final globalPath = _globalConfigPath();
       final resolvedProjectPath = includeProjectConfig
@@ -174,6 +241,7 @@ class LiveConfigService implements ConfigService {
           ),
         ],
         documents: documents,
+        runtimeSettings: null,
       );
     }
   }
@@ -206,6 +274,19 @@ class LiveConfigService implements ConfigService {
   }
 
   @override
+  Future<ConfigSavePreview> previewRuntimeSettingsSave({
+    required ConfigRuntimeSettingsUpdate update,
+  }) {
+    return previewDocumentSave(
+      document: update.document,
+      nextContent: _buildRuntimeSettingsContent(
+        currentContent: update.document.content,
+        values: update.values,
+      ),
+    );
+  }
+
+  @override
   Future<void> saveDocument({
     required ConfigDocumentData document,
     required String nextContent,
@@ -216,11 +297,36 @@ class LiveConfigService implements ConfigService {
   }
 
   String _globalConfigPath() {
+    if (_globalConfigPathOverride case final path?) {
+      return path;
+    }
     final home = Platform.environment['HOME'];
     if (home == null || home.isEmpty) {
       return '.config/mise/config.toml';
     }
     return '$home/.config/mise/config.toml';
+  }
+
+  ConfigRuntimeSettingsData _buildRuntimeSettings({
+    required ConfigDocumentData document,
+    required String? content,
+  }) {
+    final settings = _parseAssignments(_extractSection(content, 'settings'));
+    return ConfigRuntimeSettingsData(
+      document: document,
+      settings: [
+        for (final definition in _runtimeSettingDefinitions)
+          ConfigRuntimeSetting(
+            key: definition.key,
+            label: definition.label,
+            value: settings[definition.key] ?? '',
+            defaultValue: definition.defaultValue,
+            detail: definition.detail,
+            type: definition.type,
+            isSet: settings.containsKey(definition.key),
+          ),
+      ],
+    );
   }
 
   String _projectConfigPath({required String projectPath}) =>
@@ -456,11 +562,139 @@ class LiveConfigService implements ConfigService {
           .substring(0, separatorIndex)
           .trim()
           .replaceAll('"', '');
-      final value = trimmed.substring(separatorIndex + 1).trim();
+      final value = _stripTomlQuotes(trimmed.substring(separatorIndex + 1));
       result[key] = value;
     }
 
     return result;
+  }
+
+  String _stripTomlQuotes(String value) {
+    final trimmed = value.trim();
+    if (trimmed.length < 2) {
+      return trimmed;
+    }
+    final quote = trimmed[0];
+    if ((quote != '"' && quote != "'") ||
+        trimmed[trimmed.length - 1] != quote) {
+      return trimmed;
+    }
+    return trimmed
+        .substring(1, trimmed.length - 1)
+        .replaceAll(r'\"', '"')
+        .replaceAll(r"\'", "'");
+  }
+
+  String _buildRuntimeSettingsContent({
+    required String currentContent,
+    required Map<String, String?> values,
+  }) {
+    final normalized = _normalizeContent(currentContent);
+    final lines = normalized.isEmpty
+        ? <String>[]
+        : const LineSplitter().convert(normalized);
+    final settingsStart = _findSectionStart(lines, 'settings');
+    final nextValues = Map<String, String?>.from(values);
+
+    if (settingsStart == -1) {
+      final nextLines = <String>[...lines];
+      if (nextLines.isNotEmpty && nextLines.last.trim().isNotEmpty) {
+        nextLines.add('');
+      }
+      nextLines.add('[settings]');
+      for (final definition in _runtimeSettingDefinitions) {
+        final value = nextValues[definition.key]?.trim();
+        if (value == null || value.isEmpty) {
+          continue;
+        }
+        nextLines.add(
+          '${definition.key} = ${_formatSettingValue(definition, value)}',
+        );
+      }
+      return _normalizeContent(nextLines.join('\n'));
+    }
+
+    final settingsEnd = _findSectionEnd(lines, settingsStart);
+    final sectionKeyPattern = RegExp(r'^([A-Za-z0-9_.-]+)\s*=');
+    final handledKeys = <String>{};
+    final nextLines = <String>[];
+
+    nextLines.addAll(lines.take(settingsStart + 1));
+    for (final line in lines.sublist(settingsStart + 1, settingsEnd)) {
+      final match = sectionKeyPattern.firstMatch(line.trimLeft());
+      final key = match?.group(1);
+      if (key != null && nextValues.containsKey(key)) {
+        handledKeys.add(key);
+        final definition = _definitionForKey(key);
+        final value = nextValues[key]?.trim();
+        if (definition == null || value == null || value.isEmpty) {
+          continue;
+        }
+        nextLines.add('$key = ${_formatSettingValue(definition, value)}');
+        continue;
+      }
+      nextLines.add(line);
+    }
+
+    for (final definition in _runtimeSettingDefinitions) {
+      if (handledKeys.contains(definition.key)) {
+        continue;
+      }
+      final value = nextValues[definition.key]?.trim();
+      if (value == null || value.isEmpty) {
+        continue;
+      }
+      nextLines.add(
+        '${definition.key} = ${_formatSettingValue(definition, value)}',
+      );
+    }
+
+    nextLines.addAll(lines.skip(settingsEnd));
+    return _normalizeContent(nextLines.join('\n'));
+  }
+
+  int _findSectionStart(List<String> lines, String sectionName) {
+    final header = '[$sectionName]';
+    for (var index = 0; index < lines.length; index++) {
+      if (lines[index].trim() == header) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  int _findSectionEnd(List<String> lines, int sectionStart) {
+    for (var index = sectionStart + 1; index < lines.length; index++) {
+      final trimmed = lines[index].trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        return index;
+      }
+    }
+    return lines.length;
+  }
+
+  _RuntimeSettingDefinition? _definitionForKey(String key) {
+    for (final definition in _runtimeSettingDefinitions) {
+      if (definition.key == key) {
+        return definition;
+      }
+    }
+    return null;
+  }
+
+  String _formatSettingValue(
+    _RuntimeSettingDefinition definition,
+    String value,
+  ) {
+    return switch (definition.type) {
+      ConfigRuntimeSettingType.string => '"${_escapeTomlString(value)}"',
+      ConfigRuntimeSettingType.integer => value,
+      ConfigRuntimeSettingType.boolean => value,
+    };
+  }
+
+  String _escapeTomlString(String value) {
+    return value.replaceAll('\\', r'\\').replaceAll('"', r'\"');
   }
 
   String _normalizeContent(String value) {
@@ -632,6 +866,16 @@ class MockConfigService implements ConfigService {
       commandPreview: 'cat ${document.path}\n# mock direct file save',
       hasChanges: document.content != nextContent,
       createsFile: !document.exists,
+    );
+  }
+
+  @override
+  Future<ConfigSavePreview> previewRuntimeSettingsSave({
+    required ConfigRuntimeSettingsUpdate update,
+  }) {
+    return previewDocumentSave(
+      document: update.document,
+      nextContent: update.document.content,
     );
   }
 

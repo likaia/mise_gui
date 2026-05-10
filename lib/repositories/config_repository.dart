@@ -30,6 +30,12 @@ class ConfigRepository {
     );
   }
 
+  Future<ConfigSavePreview> previewRuntimeSettingsSave({
+    required ConfigRuntimeSettingsUpdate update,
+  }) {
+    return _configService.previewRuntimeSettingsSave(update: update);
+  }
+
   Future<void> saveDocument({
     required ConfigDocumentData document,
     required String nextContent,
