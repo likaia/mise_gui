@@ -138,20 +138,27 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   Future<void> _handleRemoveDirectory(ScanDirectoryRecord directory) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除扫描目录'),
-        content: Text('不再扫描 ${directory.path}？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+      builder: (dialogContext) {
+        final colors = AppTheme.colorsOf(dialogContext);
+        return AlertDialog(
+          title: const Text('删除扫描目录'),
+          content: Text('不再扫描 ${directory.path}？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: colors.danger,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
     );
     if (confirmed != true || !mounted) {
       return;
@@ -381,8 +388,6 @@ class _ScanDirectoriesPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-
     return AppPanel(
       padding: const EdgeInsets.all(18),
       radius: 20,
@@ -391,58 +396,13 @@ class _ScanDirectoriesPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('扫描范围', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    Text(
-                      '添加工作区目录后，应用会在其中查找 mise 项目和项目级版本覆盖。',
-                      style: TextStyle(color: colors.textMuted, height: 1.45),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              if (directories.isNotEmpty)
-                Text(
-                  '${directories.length} 个目录',
-                  style: TextStyle(
-                    color: colors.textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-            ],
+          _ScanDirectoriesHeader(
+            directoryCount: directories.length,
+            onAddDirectory: onAddDirectory,
           ),
-          const SizedBox(height: 14),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: onAddDirectory,
-              icon: const Icon(Icons.create_new_folder_rounded),
-              label: const Text('添加目录'),
-            ),
-          ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
           if (directories.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-              decoration: BoxDecoration(
-                color: colors.panelRaised.withValues(alpha: 0.24),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: colors.border.withValues(alpha: 0.3)),
-              ),
-              child: Text(
-                '还没有扫描目录。先添加一个目录，再开始扫描项目覆盖。',
-                style: TextStyle(color: colors.textMuted, height: 1.45),
-              ),
-            )
+            _ScanDirectoriesEmptyState(onAddDirectory: onAddDirectory)
           else
             Column(
               children: [
@@ -504,6 +464,186 @@ class _ScanDirectoriesPanel extends StatelessWidget {
       normalized = normalized.substring(0, normalized.length - 1);
     }
     return normalized;
+  }
+}
+
+class _ScanDirectoriesHeader extends StatelessWidget {
+  const _ScanDirectoriesHeader({
+    required this.directoryCount,
+    required this.onAddDirectory,
+  });
+
+  final int directoryCount;
+  final VoidCallback onAddDirectory;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 620;
+        final titleBlock = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('扫描范围', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text(
+              '添加工作区目录后，应用会在其中查找 mise 项目和项目级版本覆盖。',
+              style: TextStyle(color: colors.textMuted, height: 1.45),
+            ),
+          ],
+        );
+        final actions = Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            if (directoryCount > 0)
+              _DirectoryCountPill(directoryCount: directoryCount),
+            FilledButton.icon(
+              onPressed: onAddDirectory,
+              icon: const Icon(Icons.create_new_folder_rounded, size: 18),
+              label: const Text('添加目录'),
+            ),
+          ],
+        );
+
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [titleBlock, const SizedBox(height: 14), actions],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: titleBlock),
+            const SizedBox(width: 18),
+            actions,
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _DirectoryCountPill extends StatelessWidget {
+  const _DirectoryCountPill({required this.directoryCount});
+
+  final int directoryCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: colors.panelRaised.withValues(alpha: 0.44),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colors.border.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.folder_copy_rounded,
+            size: 16,
+            color: colors.textMuted.withValues(alpha: 0.92),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$directoryCount 个目录',
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanDirectoriesEmptyState extends StatelessWidget {
+  const _ScanDirectoriesEmptyState({required this.onAddDirectory});
+
+  final VoidCallback onAddDirectory;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 620;
+        final icon = Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: colors.info.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: colors.info.withValues(alpha: 0.24)),
+          ),
+          child: Icon(Icons.folder_open_rounded, color: colors.info),
+        );
+        final copy = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '还没有扫描目录',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '添加一个工作区目录后，就可以开始扫描项目覆盖。',
+              style: TextStyle(color: colors.textMuted, height: 1.45),
+            ),
+          ],
+        );
+        final button = OutlinedButton.icon(
+          onPressed: onAddDirectory,
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('添加第一个目录'),
+        );
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: colors.panelRaised.withValues(alpha: 0.24),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: colors.border.withValues(alpha: 0.34)),
+          ),
+          child: compact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    icon,
+                    const SizedBox(height: 12),
+                    copy,
+                    const SizedBox(height: 14),
+                    button,
+                  ],
+                )
+              : Row(
+                  children: [
+                    icon,
+                    const SizedBox(width: 14),
+                    Expanded(child: copy),
+                    const SizedBox(width: 14),
+                    button,
+                  ],
+                ),
+        );
+      },
+    );
   }
 }
 
@@ -600,14 +740,52 @@ class _ScanDirectoryCard extends StatelessWidget {
                 label: Text(directory.enabled ? '暂停扫描' : '启用扫描'),
               ),
               const Spacer(),
-              IconButton(
-                tooltip: '删除扫描目录',
-                onPressed: onRemove,
-                icon: const Icon(Icons.delete_outline_rounded),
-              ),
+              _DangerIconButton(tooltip: '删除扫描目录', onPressed: onRemove),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DangerIconButton extends StatelessWidget {
+  const _DangerIconButton({required this.tooltip, required this.onPressed});
+
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: const Icon(Icons.delete_outline_rounded),
+      style: ButtonStyle(
+        foregroundColor: WidgetStatePropertyAll(colors.danger),
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.pressed)) {
+            return colors.danger.withValues(alpha: 0.24);
+          }
+          if (states.contains(WidgetState.hovered) ||
+              states.contains(WidgetState.focused)) {
+            return colors.danger.withValues(alpha: 0.18);
+          }
+          return colors.danger.withValues(alpha: 0.1);
+        }),
+        side: WidgetStateProperty.resolveWith((states) {
+          final alpha =
+              states.contains(WidgetState.hovered) ||
+                  states.contains(WidgetState.focused)
+              ? 0.62
+              : 0.38;
+          return BorderSide(color: colors.danger.withValues(alpha: alpha));
+        }),
+        minimumSize: const WidgetStatePropertyAll(Size.square(38)),
+        fixedSize: const WidgetStatePropertyAll(Size.square(38)),
+        padding: const WidgetStatePropertyAll(EdgeInsets.zero),
       ),
     );
   }
