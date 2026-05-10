@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Read Flutter version
+        id: flutter-version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^flutter = "\(.*\)"/\1/p' mise.toml | head -n 1)"
+          if [[ -z "$version" ]]; then
+            echo "Could not read Flutter version from mise.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+          cache: true
+
+      - name: Show Flutter environment
+        run: flutter doctor -v
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test --coverage
+
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS
+            os: macos-latest
+            target: macos
+          - label: Linux
+            os: ubuntu-latest
+            target: linux
+          - label: Windows
+            os: windows-latest
+            target: windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Read Flutter version
+        id: flutter-version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^flutter = "\(.*\)"/\1/p' mise.toml | head -n 1)"
+          if [[ -z "$version" ]]; then
+            echo "Could not read Flutter version from mise.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+          cache: true
+
+      - name: Install Linux desktop toolchain
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            libglu1-mesa \
+            libgtk-3-dev \
+            liblzma-dev \
+            libstdc++-12-dev \
+            ninja-build \
+            pkg-config
+
+      - name: Enable desktop target
+        shell: bash
+        run: flutter config --enable-${{ matrix.target }}-desktop
+
+      - name: Show Flutter environment
+        run: flutter doctor -v
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build desktop app
+        run: flutter build ${{ matrix.target }} --release
