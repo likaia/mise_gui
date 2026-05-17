@@ -97,4 +97,69 @@ void main() {
     );
     expect(preview.nextContent, contains('[tools]\nnode = "20"'));
   });
+
+  test('previews proxy setting changes as env updates', () async {
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'mise-config-service-',
+    );
+    addTearDown(() async {
+      if (await tempDirectory.exists()) {
+        await tempDirectory.delete(recursive: true);
+      }
+    });
+    final configFile = File('${tempDirectory.path}/config.toml');
+    await configFile.writeAsString(
+      '[tools]\n'
+      'node = "20"\n'
+      '\n'
+      '[env]\n'
+      'FOO = "bar"\n'
+      'http_proxy = "http://127.0.0.1:7890"\n',
+    );
+
+    final service = LiveConfigService(globalConfigPath: configFile.path);
+    final workspace = await service.fetchWorkspace(includeProjectConfig: false);
+    final proxySettings = workspace.proxySettings!;
+
+    expect(
+      proxySettings.settings
+          .firstWhere((setting) => setting.key == 'http_proxy')
+          .value,
+      'http://127.0.0.1:7890',
+    );
+
+    final preview = await service.previewProxySettingsSave(
+      update: ConfigProxySettingsUpdate(
+        document: proxySettings.document,
+        values: const {
+          'http_proxy': 'http://127.0.0.1:1087',
+          'https_proxy': 'http://127.0.0.1:1087',
+          'all_proxy': null,
+          'no_proxy': 'localhost,127.0.0.1',
+        },
+      ),
+    );
+
+    expect(preview.hasChanges, isTrue);
+    expect(preview.nextContent, contains('FOO = "bar"'));
+    expect(
+      preview.nextContent,
+      contains('http_proxy = "http://127.0.0.1:1087"'),
+    );
+    expect(
+      preview.nextContent,
+      contains('HTTP_PROXY = "http://127.0.0.1:1087"'),
+    );
+    expect(
+      preview.nextContent,
+      contains('https_proxy = "http://127.0.0.1:1087"'),
+    );
+    expect(
+      preview.nextContent,
+      contains('HTTPS_PROXY = "http://127.0.0.1:1087"'),
+    );
+    expect(preview.nextContent, contains('no_proxy = "localhost,127.0.0.1"'));
+    expect(preview.nextContent, contains('NO_PROXY = "localhost,127.0.0.1"'));
+    expect(preview.nextContent, contains('[tools]\nnode = "20"'));
+  });
 }

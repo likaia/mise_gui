@@ -402,6 +402,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
     }
     for (final project in snapshot.projects) {
       paths.add(project.configPath);
+      paths.addAll(project.configPaths);
     }
     return paths.toList()..sort();
   }
@@ -1570,7 +1571,7 @@ POSIX path of chosenFolder
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('输入要扫描的目录路径。应用会在目录内递归查找 `mise.toml`。'),
+            const Text('输入要扫描的目录路径。应用会在目录内递归查找 `mise.toml` 和常见版本文件。'),
             const SizedBox(height: 14),
             TextField(
               controller: _controller,

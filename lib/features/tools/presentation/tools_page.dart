@@ -1433,6 +1433,9 @@ class _ToolWorkspace extends StatelessWidget {
         _VersionInventoryPanel(
           title: '本机版本',
           subtitle: '已安装到本机，可直接切换。',
+          toolId: tool.id,
+          toolName: tool.name,
+          inventoryType: _VersionInventoryType.installed,
           versions: tool.installedVersions,
           emptyState: const _PanelEmptyStateData(
             icon: Icons.inventory_2_outlined,
@@ -1446,6 +1449,9 @@ class _ToolWorkspace extends StatelessWidget {
         _VersionInventoryPanel(
           title: '远端版本',
           subtitle: '可安装或升级的远端版本。',
+          toolId: tool.id,
+          toolName: tool.name,
+          inventoryType: _VersionInventoryType.remote,
           versions: tool.remoteVersions,
           emptyState: const _PanelEmptyStateData(
             icon: Icons.cloud_off_rounded,
@@ -1615,10 +1621,15 @@ class _ToolHeroPanel extends StatelessWidget {
   }
 }
 
+enum _VersionInventoryType { installed, remote }
+
 class _VersionInventoryPanel extends StatelessWidget {
   const _VersionInventoryPanel({
     required this.title,
     required this.subtitle,
+    required this.toolId,
+    required this.toolName,
+    required this.inventoryType,
     required this.versions,
     this.emptyState,
     required this.onOpenPreview,
@@ -1626,6 +1637,9 @@ class _VersionInventoryPanel extends StatelessWidget {
 
   final String title;
   final String subtitle;
+  final String toolId;
+  final String toolName;
+  final _VersionInventoryType inventoryType;
   final List<ToolVersionRecord> versions;
   final _PanelEmptyStateData? emptyState;
   final Future<void> Function(
@@ -1672,7 +1686,10 @@ class _VersionInventoryPanel extends StatelessWidget {
               children: [
                 for (var index = 0; index < versions.length; index++) ...[
                   _VersionCard(
+                    toolId: toolId,
+                    toolName: toolName,
                     version: versions[index],
+                    inventoryType: inventoryType,
                     onOpenPreview: onOpenPreview,
                   ),
                   if (index != versions.length - 1)
@@ -1691,9 +1708,18 @@ class _VersionInventoryPanel extends StatelessWidget {
 }
 
 class _VersionCard extends StatelessWidget {
-  const _VersionCard({required this.version, required this.onOpenPreview});
+  const _VersionCard({
+    required this.toolId,
+    required this.toolName,
+    required this.version,
+    required this.inventoryType,
+    required this.onOpenPreview,
+  });
 
+  final String toolId;
+  final String toolName;
   final ToolVersionRecord version;
+  final _VersionInventoryType inventoryType;
   final Future<void> Function(
     BuildContext context,
     ActionPreviewDialogData data,
@@ -1710,7 +1736,10 @@ class _VersionCard extends StatelessWidget {
       builder: (context, constraints) {
         final stacked = constraints.maxWidth < 520;
         final actionRow = _VersionActions(
+          toolId: toolId,
+          toolName: toolName,
           version: version,
+          inventoryType: inventoryType,
           onOpenPreview: onOpenPreview,
         );
 
@@ -1786,9 +1815,18 @@ class _VersionCard extends StatelessWidget {
 }
 
 class _VersionActions extends StatelessWidget {
-  const _VersionActions({required this.version, required this.onOpenPreview});
+  const _VersionActions({
+    required this.toolId,
+    required this.toolName,
+    required this.version,
+    required this.inventoryType,
+    required this.onOpenPreview,
+  });
 
+  final String toolId;
+  final String toolName;
   final ToolVersionRecord version;
+  final _VersionInventoryType inventoryType;
   final Future<void> Function(
     BuildContext context,
     ActionPreviewDialogData data,
@@ -1840,6 +1878,34 @@ class _VersionActions extends StatelessWidget {
               ),
             ),
             child: Text(version.isRecommended ? '升级' : '安装'),
+          ),
+        if (inventoryType == _VersionInventoryType.installed &&
+            version.isInstalled)
+          TextButton.icon(
+            onPressed: () => onOpenPreview(
+              context,
+              ActionPreviewDialogData(
+                title: '卸载 $toolName ${version.version}',
+                summary: version.isActive
+                    ? '这个版本当前正在使用。卸载只会删除本机安装目录，不会修改全局或项目配置。'
+                    : '会删除本机这个已安装版本，不会修改全局或项目配置。',
+                command: 'mise uninstall $toolId@${version.version}',
+                level: HealthLevel.warning,
+                affectedFiles: _affectedFilesForToolCommand(
+                  'mise uninstall $toolId@${version.version}',
+                ),
+                impactScope: const ['只移除这个具体版本的本地安装记录。', '全局和项目配置不会被自动修改。'],
+                riskNotes: version.isActive
+                    ? const [
+                        '当前生效版本被删除后，如果配置仍引用它，后续命令可能提示缺失。',
+                        '卸载前请确认已经切换到其他版本，或准备重新安装。',
+                      ]
+                    : const ['如果其他项目配置仍引用这个版本，进入项目后可能需要重新安装。'],
+                confirmLabel: '确认卸载版本',
+              ),
+            ),
+            icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            label: const Text('卸载'),
           ),
         IconButton(
           tooltip: '查看命令',

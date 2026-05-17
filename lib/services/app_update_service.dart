@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mise_gui/models/app_models.dart';
+import 'package:mise_gui/services/mise_process_service.dart';
 
 const _githubOwner = 'likaia';
 const _githubRepo = 'mise_gui';
@@ -147,6 +148,7 @@ class GitHubAppUpdateService implements AppUpdateService {
   Future<_HttpResponse> _get(String rawUrl) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 8);
+    configureHttpClientProxy(client);
 
     try {
       final request = await client.getUrl(Uri.parse(rawUrl));

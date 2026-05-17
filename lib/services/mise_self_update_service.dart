@@ -258,6 +258,7 @@ class LocalMiseSystemCommandRunner implements MiseSystemCommandRunner {
       addPathEntries('/home/linuxbrew/.linuxbrew/bin');
       addPathEntries('/usr/bin:/bin:/usr/sbin:/sbin');
     }
+    environment.addAll(readConfiguredMiseProxyEnvironmentSync());
     environment['PATH'] = pathEntries.join(Platform.pathSeparator);
     return environment;
   }
@@ -374,6 +375,7 @@ class GitHubMiseSelfUpdateService implements MiseSelfUpdateService {
   Future<Map<String, dynamic>> _getJsonMap(String rawUrl) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 8);
+    configureHttpClientProxy(client);
 
     try {
       final request = await client.getUrl(Uri.parse(rawUrl));

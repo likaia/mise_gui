@@ -12,6 +12,18 @@ abstract class ProjectScanService {
   );
 }
 
+class _DiscoveredProjectConfig {
+  const _DiscoveredProjectConfig({
+    required this.directoryPath,
+    required this.primaryPath,
+    required this.paths,
+  });
+
+  final String directoryPath;
+  final String primaryPath;
+  final List<String> paths;
+}
+
 class LiveProjectScanService implements ProjectScanService {
   const LiveProjectScanService({
     required MiseQueryService queryService,
@@ -30,6 +42,18 @@ class LiveProjectScanService implements ProjectScanService {
     '.mise.local.toml',
     'mise.local.toml',
   ];
+
+  static const String _toolVersionsFileName = '.tool-versions';
+
+  static const Map<String, String> _singleToolVersionFiles = <String, String>{
+    '.node-version': 'node',
+    '.nvmrc': 'node',
+    '.python-version': 'python',
+    '.ruby-version': 'ruby',
+    '.java-version': 'java',
+    '.go-version': 'go',
+    '.terraform-version': 'terraform',
+  };
 
   static const Set<String> _ignoredDirectories = <String>{
     '.git',
@@ -59,12 +83,12 @@ class LiveProjectScanService implements ProjectScanService {
       final projectsByPath = <String, ProjectRecord>{};
 
       for (final directory in collapsedDirectories) {
-        final configPaths = await _discoverWorkspaceConfigPaths(directory.path);
-        for (final configPath in configPaths) {
+        final configs = await _discoverWorkspaceConfigs(directory.path);
+        for (final config in configs) {
           ProjectRecord? project;
           try {
             project = await _buildProjectRecord(
-              configPath: configPath,
+              config: config,
               scanRootPath: directory.path,
               globalConfig: globalConfig,
             );
@@ -92,16 +116,18 @@ class LiveProjectScanService implements ProjectScanService {
     }
   }
 
-  Future<List<String>> _discoverWorkspaceConfigPaths(String rootPath) async {
+  Future<List<_DiscoveredProjectConfig>> _discoverWorkspaceConfigs(
+    String rootPath,
+  ) async {
     final rootDirectory = Directory(rootPath);
     if (!await rootDirectory.exists()) {
-      return const <String>[];
+      return const <_DiscoveredProjectConfig>[];
     }
 
     final queue = Queue<({Directory directory, int depth})>()
       ..add((directory: rootDirectory, depth: 0));
     final visited = <String>{};
-    final discovered = <String>{};
+    final discovered = <String, _DiscoveredProjectConfig>{};
 
     while (queue.isNotEmpty && visited.length < maxDirectoriesPerRoot) {
       final item = queue.removeFirst();
@@ -110,9 +136,9 @@ class LiveProjectScanService implements ProjectScanService {
         continue;
       }
 
-      final configPath = await _discoverPrimaryConfigPath(path);
-      if (configPath != null) {
-        discovered.add(configPath);
+      final config = await _discoverProjectConfig(path);
+      if (config != null) {
+        discovered[path] = config;
         if (discovered.length >= maxProjectsPerRoot) {
           break;
         }
@@ -144,8 +170,12 @@ class LiveProjectScanService implements ProjectScanService {
       }
     }
 
-    final ordered = discovered.toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final ordered = discovered.values.toList()
+      ..sort(
+        (a, b) => a.directoryPath.toLowerCase().compareTo(
+          b.directoryPath.toLowerCase(),
+        ),
+      );
     return ordered;
   }
 
@@ -173,35 +203,74 @@ class LiveProjectScanService implements ProjectScanService {
     return kept;
   }
 
-  Future<String?> _discoverPrimaryConfigPath(String directoryPath) async {
+  Future<_DiscoveredProjectConfig?> _discoverProjectConfig(
+    String directoryPath,
+  ) async {
+    final paths = <String>[];
+
     for (final fileName in _workspaceConfigNames) {
       final candidate = File(
         '$directoryPath${Platform.pathSeparator}$fileName',
       );
       if (await candidate.exists()) {
-        return candidate.path;
+        paths.add(candidate.path);
       }
     }
-    return null;
-  }
 
-  Future<ProjectRecord?> _buildProjectRecord({
-    required String configPath,
-    required String scanRootPath,
-    required String globalConfig,
-  }) async {
-    final workspacePath = File(configPath).parent.path;
-    final workspaceConfig = await _readFileIfExists(configPath);
-    if (workspaceConfig == null) {
+    final toolVersions = File(
+      '$directoryPath${Platform.pathSeparator}$_toolVersionsFileName',
+    );
+    if (await toolVersions.exists()) {
+      paths.add(toolVersions.path);
+    }
+
+    for (final fileName in _singleToolVersionFiles.keys) {
+      final candidate = File(
+        '$directoryPath${Platform.pathSeparator}$fileName',
+      );
+      if (await candidate.exists()) {
+        paths.add(candidate.path);
+      }
+    }
+
+    if (paths.isEmpty) {
       return null;
     }
 
-    final projectAssignments = _parseAssignments(
-      _extractSection(workspaceConfig, 'tools'),
+    return _DiscoveredProjectConfig(
+      directoryPath: directoryPath,
+      primaryPath: paths.first,
+      paths: List.unmodifiable(paths),
     );
+  }
+
+  Future<ProjectRecord?> _buildProjectRecord({
+    required _DiscoveredProjectConfig config,
+    required String scanRootPath,
+    required String globalConfig,
+  }) async {
+    final workspacePath = config.directoryPath;
+    final projectContents = <String, String>{};
+    for (final path in config.paths) {
+      final content = await _readFileIfExists(path);
+      if (content != null) {
+        projectContents[path] = content;
+      }
+    }
+    if (projectContents.isEmpty) {
+      return null;
+    }
+
+    final projectAssignments = _parseProjectAssignments(projectContents);
+    final projectSources = _parseProjectAssignmentSources(projectContents);
     final globalAssignments = _parseAssignments(
       _extractSection(globalConfig, 'tools'),
     );
+    final commandPreview = [
+      'mise current',
+      'mise ls --json',
+      for (final path in config.paths) 'cat $path',
+    ].join('\n');
 
     var installedTools = <String, List<MiseInstalledToolVersionRef>>{};
     String? scanIssue;
@@ -242,8 +311,8 @@ class LiveProjectScanService implements ProjectScanService {
           '未设置';
       final globalVersion = globalAssignments[toolName] ?? '未设置';
       final source = declaredInProject
-          ? '项目'
-          : _formatSource(active?.source?.path, configPath);
+          ? _formatProjectSource(projectSources[toolName])
+          : _formatSource(active?.source?.path, config.primaryPath);
 
       bindings.add(
         ProjectToolBinding(
@@ -276,14 +345,11 @@ class LiveProjectScanService implements ProjectScanService {
       name: _basename(workspacePath),
       path: workspacePath,
       scanRootPath: scanRootPath,
-      configPath: configPath,
+      configPath: config.primaryPath,
+      configPaths: config.paths,
       environment: environment,
-      lastScan: await _formatLastScan(configPath),
-      commandPreview: [
-        'mise current',
-        'mise ls --json',
-        'cat $configPath',
-      ].join('\n'),
+      lastScan: await _formatLastScan(config.paths),
+      commandPreview: commandPreview,
       bindings: bindings,
       level: scanIssue != null || overrides > 0
           ? HealthLevel.warning
@@ -340,9 +406,14 @@ class LiveProjectScanService implements ProjectScanService {
     return file.readAsString();
   }
 
-  Future<String> _formatLastScan(String path) async {
+  Future<String> _formatLastScan(List<String> paths) async {
     try {
-      final modifiedAt = await File(path).lastModified();
+      final modifiedTimes = <DateTime>[];
+      for (final path in paths) {
+        modifiedTimes.add(await File(path).lastModified());
+      }
+      modifiedTimes.sort((a, b) => b.compareTo(a));
+      final modifiedAt = modifiedTimes.first;
       final elapsed = DateTime.now().difference(modifiedAt);
       if (elapsed.inMinutes < 1) {
         return '刚刚';
@@ -413,6 +484,91 @@ class LiveProjectScanService implements ProjectScanService {
     return result;
   }
 
+  Map<String, String> _parseProjectAssignments(Map<String, String> contents) {
+    final assignments = <String, String>{};
+    for (final entry in contents.entries) {
+      final parsed = _parseAssignmentsForPath(entry.key, entry.value);
+      for (final item in parsed.entries) {
+        assignments.putIfAbsent(item.key, () => item.value);
+      }
+    }
+    return assignments;
+  }
+
+  Map<String, String> _parseProjectAssignmentSources(
+    Map<String, String> contents,
+  ) {
+    final sources = <String, String>{};
+    for (final entry in contents.entries) {
+      final parsed = _parseAssignmentsForPath(entry.key, entry.value);
+      for (final item in parsed.entries) {
+        sources.putIfAbsent(item.key, () => entry.key);
+      }
+    }
+    return sources;
+  }
+
+  Map<String, String> _parseAssignmentsForPath(String path, String content) {
+    final fileName = _basename(path);
+    if (_workspaceConfigNames.contains(fileName)) {
+      return _parseAssignments(_extractSection(content, 'tools'));
+    }
+    if (fileName == _toolVersionsFileName) {
+      return _parseToolVersions(content);
+    }
+    final tool = _singleToolVersionFiles[fileName];
+    if (tool != null) {
+      final version = _parseSingleVersionFile(content, tool: tool);
+      if (version == null) {
+        return const <String, String>{};
+      }
+      return <String, String>{tool: version};
+    }
+    return const <String, String>{};
+  }
+
+  Map<String, String> _parseToolVersions(String content) {
+    final result = <String, String>{};
+    for (final line in content.split('\n')) {
+      final trimmed = _stripInlineComment(line).trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+
+      final parts = trimmed.split(RegExp(r'\s+'));
+      if (parts.length < 2) {
+        continue;
+      }
+
+      final tool = _normalizeToolName(parts.first);
+      final version = _normalizeVersionForTool(tool, parts[1]);
+      if (tool.isEmpty || version.isEmpty) {
+        continue;
+      }
+      result.putIfAbsent(tool, () => version);
+    }
+    return result;
+  }
+
+  String? _parseSingleVersionFile(String content, {required String tool}) {
+    for (final line in content.split('\n')) {
+      final version = _stripInlineComment(line).trim();
+      if (version.isEmpty) {
+        continue;
+      }
+      return _normalizeVersionForTool(tool, version);
+    }
+    return null;
+  }
+
+  String _stripInlineComment(String line) {
+    final index = line.indexOf('#');
+    if (index == -1) {
+      return line;
+    }
+    return line.substring(0, index);
+  }
+
   String _formatSource(String? sourcePath, String workspaceConfigPath) {
     if (sourcePath == null || sourcePath.isEmpty) {
       return '继承';
@@ -424,6 +580,33 @@ class LiveProjectScanService implements ProjectScanService {
       return '全局';
     }
     return '解析结果';
+  }
+
+  String _formatProjectSource(String? sourcePath) {
+    if (sourcePath == null || sourcePath.isEmpty) {
+      return '项目';
+    }
+    final fileName = _basename(sourcePath);
+    if (fileName == 'mise.toml') {
+      return '项目';
+    }
+    return '项目 $fileName';
+  }
+
+  String _normalizeToolName(String tool) {
+    return switch (tool.trim().toLowerCase()) {
+      'nodejs' => 'node',
+      'golang' => 'go',
+      _ => tool.trim().toLowerCase(),
+    };
+  }
+
+  String _normalizeVersionForTool(String tool, String version) {
+    final trimmed = version.trim();
+    if (tool == 'node' && RegExp(r'^v\d').hasMatch(trimmed)) {
+      return trimmed.substring(1);
+    }
+    return trimmed;
   }
 
   String _resolveEnvironment(Iterable<String> tools) {

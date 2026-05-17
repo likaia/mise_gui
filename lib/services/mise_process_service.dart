@@ -5,6 +5,12 @@ const String _shellEnvironmentStartMarker =
     '__MISE_GUI_SHELL_ENVIRONMENT_START__';
 const String _shellEnvironmentEndMarker = '__MISE_GUI_SHELL_ENVIRONMENT_END__';
 final RegExp _environmentKeyPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
+const Map<String, List<String>> _miseProxyEnvironmentAliases = {
+  'http_proxy': ['http_proxy', 'HTTP_PROXY'],
+  'https_proxy': ['https_proxy', 'HTTPS_PROXY'],
+  'all_proxy': ['all_proxy', 'ALL_PROXY'],
+  'no_proxy': ['no_proxy', 'NO_PROXY'],
+};
 
 class MiseCommandRequest {
   const MiseCommandRequest({
@@ -511,6 +517,9 @@ class LocalMiseProcessService implements MiseProcessService {
       environment['HOME'] = homeDirectory;
     }
 
+    environment.addAll(
+      readConfiguredMiseProxyEnvironmentSync(homeDirectory: homeDirectory),
+    );
     environment['PATH'] = pathEntries.join(Platform.pathSeparator);
     return environment;
   }
@@ -642,6 +651,222 @@ mise reshim
 Write-Host '已写入用户 PATH，请关闭并重新打开 cmd / PowerShell 后再执行工具命令。'
 ''';
   }
+}
+
+Map<String, String> readConfiguredMiseProxyEnvironmentSync({
+  String? homeDirectory,
+}) {
+  final configPath = _globalMiseConfigPath(homeDirectory: homeDirectory);
+  if (configPath == null) {
+    return const <String, String>{};
+  }
+
+  try {
+    final file = File(configPath);
+    if (!file.existsSync()) {
+      return const <String, String>{};
+    }
+    return parseMiseProxyEnvironmentFromConfig(file.readAsStringSync());
+  } on FileSystemException {
+    return const <String, String>{};
+  }
+}
+
+Map<String, String> parseMiseProxyEnvironmentFromConfig(String? content) {
+  final env = _parseTomlAssignments(_extractTomlSection(content, 'env'));
+  if (env.isEmpty) {
+    return const <String, String>{};
+  }
+
+  final result = <String, String>{};
+  for (final aliases in _miseProxyEnvironmentAliases.values) {
+    String? value;
+    for (final alias in aliases) {
+      final candidate = env[alias]?.trim();
+      if (candidate != null && candidate.isNotEmpty) {
+        value = candidate;
+        break;
+      }
+    }
+    if (value == null || value.isEmpty) {
+      continue;
+    }
+    for (final alias in aliases) {
+      result[alias] = value;
+    }
+  }
+  return result;
+}
+
+void configureHttpClientProxy(
+  HttpClient client, {
+  Map<String, String>? environment,
+}) {
+  final proxyEnvironment = <String, String>{
+    ...Platform.environment,
+    ...readConfiguredMiseProxyEnvironmentSync(),
+    if (environment != null) ...environment,
+  };
+  client.findProxy = (uri) =>
+      resolveHttpClientProxyConfiguration(uri, proxyEnvironment);
+}
+
+String resolveHttpClientProxyConfiguration(
+  Uri uri,
+  Map<String, String> environment,
+) {
+  if (_matchesNoProxy(
+    uri.host,
+    environment['no_proxy'] ?? environment['NO_PROXY'],
+  )) {
+    return 'DIRECT';
+  }
+
+  final scheme = uri.scheme.toLowerCase();
+  final rawProxy = scheme == 'https'
+      ? environment['https_proxy'] ?? environment['HTTPS_PROXY']
+      : environment['http_proxy'] ?? environment['HTTP_PROXY'];
+  final fallbackProxy = environment['all_proxy'] ?? environment['ALL_PROXY'];
+  final proxy = _formatHttpClientProxy(rawProxy ?? fallbackProxy);
+  return proxy == null ? 'DIRECT' : '$proxy; DIRECT';
+}
+
+String? _formatHttpClientProxy(String? rawProxy) {
+  final value = rawProxy?.trim();
+  if (value == null || value.isEmpty) {
+    return null;
+  }
+
+  final uri = Uri.tryParse(value);
+  if (uri == null || uri.host.isEmpty || uri.port == 0) {
+    return null;
+  }
+
+  final scheme = uri.scheme.toLowerCase();
+  final type = scheme.startsWith('socks') ? 'SOCKS' : 'PROXY';
+  return '$type ${uri.host}:${uri.port}';
+}
+
+bool _matchesNoProxy(String host, String? rawNoProxy) {
+  final normalizedHost = host.toLowerCase();
+  final value = rawNoProxy?.trim();
+  if (value == null || value.isEmpty) {
+    return false;
+  }
+
+  for (final rawRule in value.split(',')) {
+    var rule = rawRule.trim().toLowerCase();
+    if (rule.isEmpty) {
+      continue;
+    }
+    if (rule == '*') {
+      return true;
+    }
+    final portIndex = rule.lastIndexOf(':');
+    if (portIndex > 0) {
+      rule = rule.substring(0, portIndex);
+    }
+    if (rule.startsWith('*.')) {
+      final suffix = rule.substring(1);
+      if (normalizedHost.endsWith(suffix)) {
+        return true;
+      }
+    } else if (rule.startsWith('.')) {
+      if (normalizedHost.endsWith(rule)) {
+        return true;
+      }
+    } else if (normalizedHost == rule || normalizedHost.endsWith('.$rule')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+String? _globalMiseConfigPath({String? homeDirectory}) {
+  final home =
+      homeDirectory ??
+      Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'];
+  if (home == null || home.isEmpty) {
+    return null;
+  }
+  return '$home/.config/mise/config.toml';
+}
+
+String? _extractTomlSection(String? content, String sectionName) {
+  if (content == null || content.trim().isEmpty) {
+    return null;
+  }
+
+  final lines = content.split('\n');
+  final buffer = <String>[];
+  final header = '[$sectionName]';
+  var collecting = false;
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      if (collecting) {
+        break;
+      }
+      if (trimmed == header) {
+        collecting = true;
+        buffer.add(line);
+        continue;
+      }
+    }
+
+    if (collecting) {
+      buffer.add(line);
+    }
+  }
+
+  if (buffer.isEmpty) {
+    return null;
+  }
+  return buffer.join('\n').trimRight();
+}
+
+Map<String, String> _parseTomlAssignments(String? section) {
+  if (section == null || section.trim().isEmpty) {
+    return const <String, String>{};
+  }
+
+  final result = <String, String>{};
+  final lines = section.split('\n');
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty ||
+        trimmed.startsWith('#') ||
+        trimmed.startsWith('[') ||
+        !trimmed.contains('=')) {
+      continue;
+    }
+
+    final separatorIndex = trimmed.indexOf('=');
+    final key = trimmed.substring(0, separatorIndex).trim().replaceAll('"', '');
+    final value = _stripTomlQuotes(trimmed.substring(separatorIndex + 1));
+    result[key] = value;
+  }
+
+  return result;
+}
+
+String _stripTomlQuotes(String value) {
+  final trimmed = value.trim();
+  if (trimmed.length < 2) {
+    return trimmed;
+  }
+  final quote = trimmed[0];
+  if ((quote != '"' && quote != "'") || trimmed[trimmed.length - 1] != quote) {
+    return trimmed;
+  }
+  return trimmed
+      .substring(1, trimmed.length - 1)
+      .replaceAll(r'\"', '"')
+      .replaceAll(r"\'", "'");
 }
 
 Map<String, String> parseShellEnvironmentOutput(

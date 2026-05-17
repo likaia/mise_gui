@@ -20,6 +20,24 @@ class _RuntimeSettingDefinition {
   final ConfigRuntimeSettingType type;
 }
 
+class _ProxySettingDefinition {
+  const _ProxySettingDefinition({
+    required this.key,
+    required this.aliases,
+    required this.label,
+    required this.placeholder,
+    required this.detail,
+    this.requiresUri = true,
+  });
+
+  final String key;
+  final List<String> aliases;
+  final String label;
+  final String placeholder;
+  final String detail;
+  final bool requiresUri;
+}
+
 abstract class ConfigService {
   Future<ConfigWorkspaceData> fetchWorkspace({
     String? projectPath,
@@ -35,6 +53,10 @@ abstract class ConfigService {
 
   Future<ConfigSavePreview> previewRuntimeSettingsSave({
     required ConfigRuntimeSettingsUpdate update,
+  });
+
+  Future<ConfigSavePreview> previewProxySettingsSave({
+    required ConfigProxySettingsUpdate update,
   });
 
   Future<void> saveDocument({
@@ -84,6 +106,38 @@ class LiveConfigService implements ConfigService {
       defaultValue: 'true',
       detail: '控制 mise 是否输出终端进度指示。',
       type: ConfigRuntimeSettingType.boolean,
+    ),
+  ];
+
+  static const List<_ProxySettingDefinition> _proxySettingDefinitions = [
+    _ProxySettingDefinition(
+      key: 'http_proxy',
+      aliases: ['http_proxy', 'HTTP_PROXY'],
+      label: 'HTTP 代理',
+      placeholder: 'http://127.0.0.1:7890',
+      detail: '用于 HTTP 下载请求，会同步写入 http_proxy 和 HTTP_PROXY。',
+    ),
+    _ProxySettingDefinition(
+      key: 'https_proxy',
+      aliases: ['https_proxy', 'HTTPS_PROXY'],
+      label: 'HTTPS 代理',
+      placeholder: 'http://127.0.0.1:7890',
+      detail: '用于 HTTPS 下载请求，会同步写入 https_proxy 和 HTTPS_PROXY。',
+    ),
+    _ProxySettingDefinition(
+      key: 'all_proxy',
+      aliases: ['all_proxy', 'ALL_PROXY'],
+      label: '通用代理',
+      placeholder: 'socks5://127.0.0.1:7890',
+      detail: '用于支持 ALL_PROXY 的下载器或工具链。',
+    ),
+    _ProxySettingDefinition(
+      key: 'no_proxy',
+      aliases: ['no_proxy', 'NO_PROXY'],
+      label: '不代理清单',
+      placeholder: 'localhost,127.0.0.1,*.local',
+      detail: '逗号分隔的直连主机或域名，会同步写入 no_proxy 和 NO_PROXY。',
+      requiresUri: false,
     ),
   ];
 
@@ -180,6 +234,10 @@ class LiveConfigService implements ConfigService {
           document: globalDocument,
           content: globalConfig,
         ),
+        proxySettings: _buildProxySettings(
+          document: globalDocument,
+          content: globalConfig,
+        ),
       );
     } catch (error) {
       final globalPath = _globalConfigPath();
@@ -242,6 +300,7 @@ class LiveConfigService implements ConfigService {
         ],
         documents: documents,
         runtimeSettings: null,
+        proxySettings: null,
       );
     }
   }
@@ -280,6 +339,19 @@ class LiveConfigService implements ConfigService {
     return previewDocumentSave(
       document: update.document,
       nextContent: _buildRuntimeSettingsContent(
+        currentContent: update.document.content,
+        values: update.values,
+      ),
+    );
+  }
+
+  @override
+  Future<ConfigSavePreview> previewProxySettingsSave({
+    required ConfigProxySettingsUpdate update,
+  }) {
+    return previewDocumentSave(
+      document: update.document,
+      nextContent: _buildProxySettingsContent(
         currentContent: update.document.content,
         values: update.values,
       ),
@@ -327,6 +399,46 @@ class LiveConfigService implements ConfigService {
           ),
       ],
     );
+  }
+
+  ConfigProxySettingsData _buildProxySettings({
+    required ConfigDocumentData document,
+    required String? content,
+  }) {
+    final env = _parseAssignments(_extractSection(content, 'env'));
+    return ConfigProxySettingsData(
+      document: document,
+      settings: [
+        for (final definition in _proxySettingDefinitions)
+          _buildProxySetting(env, definition),
+      ],
+    );
+  }
+
+  ConfigProxySetting _buildProxySetting(
+    Map<String, String> env,
+    _ProxySettingDefinition definition,
+  ) {
+    final value = _firstEnvValue(env, definition.aliases);
+    return ConfigProxySetting(
+      key: definition.key,
+      label: definition.label,
+      value: value,
+      placeholder: definition.placeholder,
+      detail: definition.detail,
+      requiresUri: definition.requiresUri,
+      isSet: value.isNotEmpty,
+    );
+  }
+
+  String _firstEnvValue(Map<String, String> env, List<String> aliases) {
+    for (final alias in aliases) {
+      final value = env[alias]?.trim();
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+    return '';
   }
 
   String _projectConfigPath({required String projectPath}) =>
@@ -653,6 +765,69 @@ class LiveConfigService implements ConfigService {
     return _normalizeContent(nextLines.join('\n'));
   }
 
+  String _buildProxySettingsContent({
+    required String currentContent,
+    required Map<String, String?> values,
+  }) {
+    final normalized = _normalizeContent(currentContent);
+    final lines = normalized.isEmpty
+        ? <String>[]
+        : const LineSplitter().convert(normalized);
+    final envStart = _findSectionStart(lines, 'env');
+
+    final hasAnyProxyValue = values.values.any(
+      (value) => value != null && value.trim().isNotEmpty,
+    );
+    if (envStart == -1) {
+      if (!hasAnyProxyValue) {
+        return normalized;
+      }
+      final nextLines = <String>[...lines];
+      if (nextLines.isNotEmpty && nextLines.last.trim().isNotEmpty) {
+        nextLines.add('');
+      }
+      nextLines.add('[env]');
+      _appendProxySettingLines(nextLines, values);
+      return _normalizeContent(nextLines.join('\n'));
+    }
+
+    final envEnd = _findSectionEnd(lines, envStart);
+    final proxyAliases = _proxySettingDefinitions
+        .expand((definition) => definition.aliases)
+        .toSet();
+    final sectionKeyPattern = RegExp(r'^([A-Za-z0-9_.-]+)\s*=');
+    final nextLines = <String>[];
+
+    nextLines.addAll(lines.take(envStart + 1));
+    for (final line in lines.sublist(envStart + 1, envEnd)) {
+      final match = sectionKeyPattern.firstMatch(line.trimLeft());
+      final key = match?.group(1);
+      if (key != null && proxyAliases.contains(key)) {
+        continue;
+      }
+      nextLines.add(line);
+    }
+
+    _appendProxySettingLines(nextLines, values);
+    nextLines.addAll(lines.skip(envEnd));
+    return _normalizeContent(nextLines.join('\n'));
+  }
+
+  void _appendProxySettingLines(
+    List<String> lines,
+    Map<String, String?> values,
+  ) {
+    for (final definition in _proxySettingDefinitions) {
+      final value = values[definition.key]?.trim();
+      if (value == null || value.isEmpty) {
+        continue;
+      }
+      for (final alias in definition.aliases) {
+        lines.add('$alias = "${_escapeTomlString(value)}"');
+      }
+    }
+  }
+
   int _findSectionStart(List<String> lines, String sectionName) {
     final header = '[$sectionName]';
     for (var index = 0; index < lines.length; index++) {
@@ -872,6 +1047,16 @@ class MockConfigService implements ConfigService {
   @override
   Future<ConfigSavePreview> previewRuntimeSettingsSave({
     required ConfigRuntimeSettingsUpdate update,
+  }) {
+    return previewDocumentSave(
+      document: update.document,
+      nextContent: update.document.content,
+    );
+  }
+
+  @override
+  Future<ConfigSavePreview> previewProxySettingsSave({
+    required ConfigProxySettingsUpdate update,
   }) {
     return previewDocumentSave(
       document: update.document,

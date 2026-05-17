@@ -42,6 +42,39 @@ void main() {
     expect(environment.length, 2);
   });
 
+  test('parses proxy environment from mise config env section', () {
+    final environment = parseMiseProxyEnvironmentFromConfig(
+      '[tools]\n'
+      'node = "20"\n'
+      '\n'
+      '[env]\n'
+      'https_proxy = "http://127.0.0.1:7890"\n'
+      'no_proxy = "localhost,127.0.0.1"\n',
+    );
+
+    expect(environment['https_proxy'], 'http://127.0.0.1:7890');
+    expect(environment['HTTPS_PROXY'], 'http://127.0.0.1:7890');
+    expect(environment['no_proxy'], 'localhost,127.0.0.1');
+    expect(environment['NO_PROXY'], 'localhost,127.0.0.1');
+  });
+
+  test('resolves HttpClient proxy configuration from proxy environment', () {
+    final proxy = resolveHttpClientProxyConfiguration(
+      Uri.parse('https://api.github.com/repos/jdx/mise'),
+      const {'https_proxy': 'http://127.0.0.1:7890'},
+    );
+    final direct = resolveHttpClientProxyConfiguration(
+      Uri.parse('https://localhost/status'),
+      const {
+        'https_proxy': 'http://127.0.0.1:7890',
+        'no_proxy': 'localhost,127.0.0.1',
+      },
+    );
+
+    expect(proxy, 'PROXY 127.0.0.1:7890; DIRECT');
+    expect(direct, 'DIRECT');
+  });
+
   test('extracts resolved executable path from noisy shell output', () {
     const resolved = MiseResolvedExecutableRef(
       subject: 'node',

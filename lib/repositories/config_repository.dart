@@ -36,6 +36,12 @@ class ConfigRepository {
     return _configService.previewRuntimeSettingsSave(update: update);
   }
 
+  Future<ConfigSavePreview> previewProxySettingsSave({
+    required ConfigProxySettingsUpdate update,
+  }) {
+    return _configService.previewProxySettingsSave(update: update);
+  }
+
   Future<void> saveDocument({
     required ConfigDocumentData document,
     required String nextContent,

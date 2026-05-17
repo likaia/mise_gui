@@ -114,11 +114,33 @@ class _ConfigPageState extends ConsumerState<ConfigPage> {
                 ),
               ),
             ],
+            if (workspace.proxySettings case final proxySettings?) ...[
+              const SizedBox(height: 18),
+              _ProxySettingsPanel(
+                data: proxySettings,
+                onEdit: () => _openProxySettingsEditor(
+                  context: context,
+                  ref: ref,
+                  data: proxySettings,
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
             for (final section in workspace.sections)
               Padding(
                 padding: const EdgeInsets.only(bottom: 18),
-                child: _ConfigSection(section: section),
+                child: _ConfigSection(
+                  section: section,
+                  onEditProxy:
+                      section.title == '运行时设置' &&
+                          workspace.proxySettings != null
+                      ? () => _openProxySettingsEditor(
+                          context: context,
+                          ref: ref,
+                          data: workspace.proxySettings!,
+                        )
+                      : null,
+                ),
               ),
           ],
         ),
@@ -164,6 +186,25 @@ class _ConfigPageState extends ConsumerState<ConfigPage> {
       final messenger = ScaffoldMessenger.of(context);
       messenger.removeCurrentSnackBar();
       messenger.showSnackBar(const SnackBar(content: Text('运行时设置已写回全局配置。')));
+    }
+  }
+
+  Future<void> _openProxySettingsEditor({
+    required BuildContext context,
+    required WidgetRef ref,
+    required ConfigProxySettingsData data,
+  }) async {
+    final didSave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => _ProxySettingsEditorDialog(data: data),
+    );
+
+    if (didSave == true && context.mounted) {
+      ref.invalidate(configProvider);
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.removeCurrentSnackBar();
+      messenger.showSnackBar(const SnackBar(content: Text('代理设置已写回全局配置。')));
     }
   }
 }
@@ -628,10 +669,126 @@ class _RuntimeSettingTile extends StatelessWidget {
   }
 }
 
+class _ProxySettingsPanel extends StatelessWidget {
+  const _ProxySettingsPanel({required this.data, required this.onEdit});
+
+  final ConfigProxySettingsData data;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return AppPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('网络代理', style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 6),
+                    Text(
+                      '写入 ${data.document.fileName} 的 [env]，GUI 发起的 mise 命令也会读取这些代理变量。',
+                      style: TextStyle(color: colors.textMuted, height: 1.45),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              OutlinedButton.icon(
+                onPressed: onEdit,
+                icon: const Icon(Icons.public_rounded),
+                label: Text(data.hasProxy ? '调整代理' : '设置代理'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 920 ? 4 : 2;
+              const spacing = 12.0;
+              final width =
+                  (constraints.maxWidth - spacing * (columns - 1)) / columns;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (final setting in data.settings)
+                    SizedBox(
+                      width: width,
+                      child: _ProxySettingTile(setting: setting),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProxySettingTile extends StatelessWidget {
+  const _ProxySettingTile({required this.setting});
+
+  final ConfigProxySetting setting;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final value = setting.isSet ? setting.value : '未设置';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.panelMuted,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            setting.label,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: setting.isSet ? colors.warning : colors.textMuted,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            setting.key,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ConfigSection extends StatelessWidget {
-  const _ConfigSection({required this.section});
+  const _ConfigSection({required this.section, this.onEditProxy});
 
   final ConfigSectionData section;
+  final VoidCallback? onEditProxy;
 
   @override
   Widget build(BuildContext context) {
@@ -656,7 +813,7 @@ class _ConfigSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          _ConfigItemGroup(section: section),
+          _ConfigItemGroup(section: section, onEditProxy: onEditProxy),
           const SizedBox(height: 14),
           _ConfigRawPanel(content: section.rawSnippet),
         ],
@@ -666,9 +823,10 @@ class _ConfigSection extends StatelessWidget {
 }
 
 class _ConfigItemGroup extends StatelessWidget {
-  const _ConfigItemGroup({required this.section});
+  const _ConfigItemGroup({required this.section, this.onEditProxy});
 
   final ConfigSectionData section;
+  final VoidCallback? onEditProxy;
 
   @override
   Widget build(BuildContext context) {
@@ -678,7 +836,12 @@ class _ConfigItemGroup extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var index = 0; index < section.items.length; index++) ...[
-          _ConfigItemRow(item: section.items[index]),
+          _ConfigItemRow(
+            item: section.items[index],
+            onEditProxy: section.items[index].label == '代理环境变量'
+                ? onEditProxy
+                : null,
+          ),
           if (index != section.items.length - 1)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 14),
@@ -695,9 +858,10 @@ class _ConfigItemGroup extends StatelessWidget {
 }
 
 class _ConfigItemRow extends StatelessWidget {
-  const _ConfigItemRow({required this.item});
+  const _ConfigItemRow({required this.item, this.onEditProxy});
 
   final ConfigItem item;
+  final VoidCallback? onEditProxy;
 
   @override
   Widget build(BuildContext context) {
@@ -727,15 +891,28 @@ class _ConfigItemRow extends StatelessWidget {
         ),
         const SizedBox(width: 18),
         ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 220),
-          child: Text(
-            item.value,
-            textAlign: TextAlign.right,
-            style: TextStyle(
-              color: _statusColor(context, item.level),
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-            ),
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                item.value,
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: _statusColor(context, item.level),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (onEditProxy != null) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: onEditProxy,
+                  icon: const Icon(Icons.public_rounded, size: 18),
+                  label: Text(item.value == '未配置' ? '设置代理' : '调整代理'),
+                ),
+              ],
+            ],
           ),
         ),
       ],
@@ -777,6 +954,363 @@ class _ConfigRawPanel extends StatelessWidget {
         ),
         children: [_CodePanel(title: 'TOML', content: content, height: 320)],
       ),
+    );
+  }
+}
+
+class _ProxySettingsEditorDialog extends ConsumerStatefulWidget {
+  const _ProxySettingsEditorDialog({required this.data});
+
+  final ConfigProxySettingsData data;
+
+  @override
+  ConsumerState<_ProxySettingsEditorDialog> createState() =>
+      _ProxySettingsEditorDialogState();
+}
+
+class _ProxySettingsEditorDialogState
+    extends ConsumerState<_ProxySettingsEditorDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final List<_ProxySettingDraft> _drafts;
+  ConfigSavePreview? _preview;
+  bool _loadingPreview = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _drafts = [
+      for (final setting in widget.data.settings)
+        _ProxySettingDraft(setting: setting),
+    ];
+    for (final draft in _drafts) {
+      draft.controller.addListener(_handleChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final draft in _drafts) {
+      draft.controller.removeListener(_handleChanged);
+      draft.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final size = MediaQuery.sizeOf(context);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.all(28),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: size.width * 0.72,
+        constraints: BoxConstraints(
+          maxWidth: 880,
+          maxHeight: size.height * 0.82,
+        ),
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          color: colors.panel,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: colors.borderStrong),
+          boxShadow: [
+            BoxShadow(
+              blurRadius: 28,
+              color: colors.backgroundDeep.withValues(alpha: 0.22),
+              offset: const Offset(0, 16),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _preview == null ? '设置网络代理' : '确认保存网络代理',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.data.document.path,
+              style: TextStyle(
+                color: colors.textMuted,
+                fontFamily: 'FiraCode',
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Expanded(
+              child: _preview == null
+                  ? _buildForm(colors)
+                  : _CodePanel(
+                      title: '差异预览',
+                      content: _preview!.diffPreview,
+                      expand: true,
+                    ),
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.end,
+              children: [
+                if (_preview != null)
+                  OutlinedButton.icon(
+                    onPressed: _saving
+                        ? null
+                        : () {
+                            setState(() {
+                              _preview = null;
+                            });
+                          },
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    label: const Text('返回编辑'),
+                  ),
+                OutlinedButton(
+                  onPressed: _loadingPreview || _saving
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                if (_preview == null)
+                  FilledButton(
+                    onPressed: _loadingPreview || !_hasChanges
+                        ? null
+                        : _generatePreview,
+                    child: Text(_loadingPreview ? '预览中...' : '预览变更'),
+                  ),
+                if (_preview != null)
+                  FilledButton(
+                    onPressed: _saving ? null : _saveSettings,
+                    child: Text(_saving ? '保存中...' : '保存代理'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildForm(AppPalette colors) {
+    return Form(
+      key: _formKey,
+      child: ListView.separated(
+        itemCount: _drafts.length,
+        separatorBuilder: (context, index) =>
+            Divider(height: 24, color: colors.border.withValues(alpha: 0.9)),
+        itemBuilder: (context, index) =>
+            _ProxySettingField(draft: _drafts[index]),
+      ),
+    );
+  }
+
+  Future<void> _generatePreview() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    setState(() {
+      _loadingPreview = true;
+    });
+
+    try {
+      final preview = await ref
+          .read(configRepositoryProvider)
+          .previewProxySettingsSave(
+            update: ConfigProxySettingsUpdate(
+              document: widget.data.document,
+              values: _collectValues(),
+            ),
+          );
+      if (!mounted) {
+        return;
+      }
+      if (!preview.hasChanges) {
+        _showFeedback('没有变更，无需预览。');
+        return;
+      }
+      setState(() {
+        _preview = preview;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingPreview = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveSettings() async {
+    final preview = _preview;
+    if (preview == null || !preview.hasChanges || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+    });
+
+    try {
+      final stopwatch = Stopwatch()..start();
+      await ref
+          .read(configRepositoryProvider)
+          .saveDocument(
+            document: preview.document,
+            nextContent: preview.nextContent,
+          );
+      stopwatch.stop();
+      await ref
+          .read(historyServiceProvider)
+          .appendEntry(
+            HistoryEntry(
+              command: preview.commandPreview,
+              timestamp: _formatNow(),
+              detail: '已通过界面调整 mise 代理设置。',
+              level: HealthLevel.info,
+              status: HistoryStatus.success,
+              exitCode: 0,
+              durationMs: stopwatch.elapsedMilliseconds,
+              stdout: preview.document.path,
+              stdoutSnippet: preview.document.path,
+            ),
+          );
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  Map<String, String?> _collectValues() {
+    return {
+      for (final draft in _drafts)
+        draft.setting.key: draft.controller.text.trim().isEmpty
+            ? null
+            : draft.controller.text.trim(),
+    };
+  }
+
+  bool get _hasChanges {
+    for (final draft in _drafts) {
+      final original = draft.setting.isSet ? draft.setting.value : '';
+      if (draft.controller.text.trim() != original) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _formatNow() {
+    final now = DateTime.now();
+    final hours = now.hour.toString().padLeft(2, '0');
+    final minutes = now.minute.toString().padLeft(2, '0');
+    return '$hours:$minutes';
+  }
+
+  void _showFeedback(String message) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _handleChanged() {
+    if (!mounted || _preview != null) {
+      return;
+    }
+    setState(() {});
+  }
+}
+
+class _ProxySettingDraft {
+  _ProxySettingDraft({required this.setting})
+    : controller = TextEditingController(text: setting.value);
+
+  final ConfigProxySetting setting;
+  final TextEditingController controller;
+
+  void dispose() {
+    controller.dispose();
+  }
+}
+
+class _ProxySettingField extends StatelessWidget {
+  const _ProxySettingField({required this.draft});
+
+  final _ProxySettingDraft draft;
+
+  static final RegExp _proxyUriPattern = RegExp(
+    r'^[A-Za-z][A-Za-z0-9+.-]*://\S+$',
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final setting = draft.setting;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                setting.label,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                setting.detail,
+                style: TextStyle(color: colors.textMuted, height: 1.45),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                setting.key,
+                style: TextStyle(color: colors.textMuted, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 18),
+        SizedBox(
+          width: 320,
+          child: TextFormField(
+            controller: draft.controller,
+            keyboardType: TextInputType.url,
+            decoration: InputDecoration(
+              labelText: setting.key,
+              hintText: setting.placeholder,
+              isDense: true,
+            ),
+            validator: (value) {
+              final trimmed = value?.trim() ?? '';
+              if (trimmed.isEmpty) {
+                return null;
+              }
+              if (trimmed.contains(RegExp(r'\s'))) {
+                return '不能包含空白字符';
+              }
+              if (setting.requiresUri && !_proxyUriPattern.hasMatch(trimmed)) {
+                return '需要包含协议，例如 ${setting.placeholder}';
+              }
+              return null;
+            },
+          ),
+        ),
+      ],
     );
   }
 }

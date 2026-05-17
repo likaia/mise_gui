@@ -334,12 +334,14 @@ class ProjectRecord {
     required this.bindings,
     required this.level,
     required this.notes,
+    this.configPaths = const [],
   });
 
   final String name;
   final String path;
   final String scanRootPath;
   final String configPath;
+  final List<String> configPaths;
   final String environment;
   final String lastScan;
   final String commandPreview;
@@ -505,6 +507,50 @@ class ConfigRuntimeSettingsUpdate {
   final Map<String, String?> values;
 }
 
+class ConfigProxySetting {
+  const ConfigProxySetting({
+    required this.key,
+    required this.label,
+    required this.value,
+    required this.placeholder,
+    required this.detail,
+    required this.isSet,
+    this.requiresUri = true,
+  });
+
+  final String key;
+  final String label;
+  final String value;
+  final String placeholder;
+  final String detail;
+  final bool isSet;
+  final bool requiresUri;
+}
+
+class ConfigProxySettingsData {
+  const ConfigProxySettingsData({
+    required this.document,
+    required this.settings,
+  });
+
+  final ConfigDocumentData document;
+  final List<ConfigProxySetting> settings;
+
+  bool get hasProxy => settings.any(
+    (setting) => setting.isSet && setting.value.trim().isNotEmpty,
+  );
+}
+
+class ConfigProxySettingsUpdate {
+  const ConfigProxySettingsUpdate({
+    required this.document,
+    required this.values,
+  });
+
+  final ConfigDocumentData document;
+  final Map<String, String?> values;
+}
+
 class ConfigSavePreview {
   const ConfigSavePreview({
     required this.document,
@@ -528,11 +574,13 @@ class ConfigWorkspaceData {
     required this.sections,
     required this.documents,
     this.runtimeSettings,
+    this.proxySettings,
   });
 
   final List<ConfigSectionData> sections;
   final List<ConfigDocumentData> documents;
   final ConfigRuntimeSettingsData? runtimeSettings;
+  final ConfigProxySettingsData? proxySettings;
 }
 
 class DiagnoseCheck {
