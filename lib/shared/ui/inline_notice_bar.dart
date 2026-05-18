@@ -3,10 +3,18 @@ import 'package:mise_gui/app/theme/app_theme.dart';
 import 'package:mise_gui/models/app_models.dart';
 
 class InlineNoticeBar extends StatelessWidget {
-  const InlineNoticeBar({super.key, required this.notice, this.onShowCommand});
+  const InlineNoticeBar({
+    super.key,
+    required this.notice,
+    this.actionLabel,
+    this.actionIcon,
+    this.onAction,
+  });
 
   final InlineNotice notice;
-  final VoidCallback? onShowCommand;
+  final String? actionLabel;
+  final IconData? actionIcon;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -65,12 +73,12 @@ class InlineNoticeBar extends StatelessWidget {
               ],
             ),
           ),
-          if (notice.commandPreview != null && onShowCommand != null) ...[
+          if (actionLabel != null && onAction != null) ...[
             const SizedBox(width: 12),
             OutlinedButton.icon(
-              onPressed: onShowCommand,
-              icon: const Icon(Icons.terminal_rounded),
-              label: const Text('查看命令'),
+              onPressed: onAction,
+              icon: Icon(actionIcon ?? Icons.open_in_new_rounded),
+              label: Text(actionLabel!),
             ),
           ],
         ],

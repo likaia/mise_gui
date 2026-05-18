@@ -13,6 +13,7 @@ npm run macos:release:app
 npm run macos:release:dmg
 npm run macos:release:zip
 npm run macos:release:zip:unsigned
+npm run macos:release:version
 npm run windows:release:zip
 npm run linux:release:tar
 npm run linux:release:zip
@@ -52,6 +53,8 @@ npm run macos:release:zip:skip-notarization
   在 Linux 上执行 `flutter build linux --release`，把 Flutter 生成的 bundle 输出为 `.tar.gz`
 - `linux:release:zip`
   在 Linux 上执行 `flutter build linux --release`，把 Flutter 生成的 bundle 输出为 `.zip`
+- `release_macos_version.sh`
+  从最新 `vX.Y.Z` tag 推导下一个版本，更新 `pubspec.yaml` 的 `version: X.Y.Z+N`，执行 macOS release app 打包，然后提交、打 tag 并推送。可用 `--version`、`--build-number`、`--remote` 覆盖默认值。
 
 ## 可用环境变量
 

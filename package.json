@@ -16,6 +16,7 @@
     "macos:release:zip": "bash ./scripts/package_macos_release_zip.sh",
     "macos:release:zip:skip-notarization": "SKIP_NOTARIZATION=1 bash ./scripts/package_macos_release_zip.sh",
     "macos:release:zip:unsigned": "SKIP_CODESIGN=1 SKIP_NOTARIZATION=1 bash ./scripts/package_macos_release_zip.sh",
+    "macos:release:version": "bash ./scripts/release_macos_version.sh",
     "windows:release:zip": "node ./scripts/package_windows_release_zip.mjs",
     "linux:release:tar": "node ./scripts/package_linux_release.mjs",
     "linux:release:zip": "node ./scripts/package_linux_release.mjs --zip"

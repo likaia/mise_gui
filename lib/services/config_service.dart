@@ -495,8 +495,8 @@ class LiveConfigService implements ConfigService {
     final summary = entries.isEmpty
         ? '该文件里暂时没有 [$sectionName] 段。'
         : entries.entries
-              .map((entry) => '${entry.key}=${entry.value}')
-              .join(', ');
+              .map((entry) => '${entry.key} = ${entry.value}')
+              .join('\n');
 
     return ConfigSectionData(
       title: title,

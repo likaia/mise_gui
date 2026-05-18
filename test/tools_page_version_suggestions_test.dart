@@ -50,6 +50,16 @@ void main() {
       ),
       MiseRemoteToolVersionRef(
         tool: 'java',
+        version: 'zulu-jre-javafx-26.30.11.0',
+        rolling: false,
+      ),
+      MiseRemoteToolVersionRef(
+        tool: 'java',
+        version: 'temurin-21.0.11+9.0.LTS-jre',
+        rolling: false,
+      ),
+      MiseRemoteToolVersionRef(
+        tool: 'java',
         version: 'temurin-17.0.16+8.0.LTS',
         rolling: false,
       ),

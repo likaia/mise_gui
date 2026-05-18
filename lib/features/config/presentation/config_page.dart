@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,143 @@ import 'package:mise_gui/shared/ui/app_page_scaffold.dart';
 import 'package:mise_gui/shared/ui/app_panel.dart';
 import 'package:mise_gui/shared/ui/async_state_view.dart';
 import 'package:mise_gui/shared/ui/status_badge.dart';
+
+const Map<String, String> javaAliasDefaults = {
+  '8': 'corretto-8',
+  '11': 'corretto-11',
+  '17': 'corretto-17',
+  '18': 'corretto-18',
+  '19': 'corretto-19',
+  '20': 'corretto-20',
+  '21': 'corretto-21',
+  '22': 'corretto-22',
+  '23': 'corretto-23',
+  '24': 'corretto-24',
+  '25': 'corretto-25',
+};
+
+String buildJavaAliasesConfigContent({
+  required String currentContent,
+  required bool enabled,
+  required Map<String, String> aliases,
+}) {
+  final normalized = _normalizeEditorContent(currentContent);
+  final lines = normalized.isEmpty
+      ? <String>[]
+      : const LineSplitter().convert(normalized);
+  final sectionStart = _findTomlSectionStart(lines, 'tool_alias.java.versions');
+  final nextLines = <String>[];
+
+  if (sectionStart == -1) {
+    nextLines.addAll(lines);
+  } else {
+    final sectionEnd = _findTomlSectionEnd(lines, sectionStart);
+    nextLines
+      ..addAll(lines.take(sectionStart))
+      ..addAll(lines.skip(sectionEnd));
+  }
+
+  if (enabled && aliases.isNotEmpty) {
+    while (nextLines.isNotEmpty && nextLines.last.trim().isEmpty) {
+      nextLines.removeLast();
+    }
+    if (nextLines.isNotEmpty) {
+      nextLines.add('');
+    }
+    nextLines.add('[tool_alias.java.versions]');
+    for (final entry in aliases.entries) {
+      nextLines.add('${entry.key} = "${_escapeTomlString(entry.value)}"');
+    }
+  }
+
+  return _normalizeEditorContent(nextLines.join('\n'));
+}
+
+String _formatJavaAliasAssignments(Map<String, String> aliases) {
+  return aliases.entries
+      .map((entry) => '${entry.key} = "${_escapeTomlString(entry.value)}"')
+      .join('\n');
+}
+
+Map<String, String> _parseJavaAliasAssignments(String content) {
+  final result = <String, String>{};
+  final lines = content.split('\n');
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#') || trimmed.startsWith('[')) {
+      continue;
+    }
+    final separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex == -1) {
+      continue;
+    }
+    final key = trimmed.substring(0, separatorIndex).trim().replaceAll('"', '');
+    final value = _stripTomlQuotes(trimmed.substring(separatorIndex + 1));
+    if (key.isEmpty || value.isEmpty) {
+      continue;
+    }
+    result[key] = value;
+  }
+
+  return result;
+}
+
+String? _extractTomlSection(String content, String sectionName) {
+  final normalized = _normalizeEditorContent(content);
+  if (normalized.isEmpty) {
+    return null;
+  }
+
+  final lines = const LineSplitter().convert(normalized);
+  final sectionStart = _findTomlSectionStart(lines, sectionName);
+  if (sectionStart == -1) {
+    return null;
+  }
+  final sectionEnd = _findTomlSectionEnd(lines, sectionStart);
+  return lines.sublist(sectionStart, sectionEnd).join('\n');
+}
+
+int _findTomlSectionStart(List<String> lines, String sectionName) {
+  final header = '[$sectionName]';
+  for (var index = 0; index < lines.length; index++) {
+    if (lines[index].trim() == header) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+int _findTomlSectionEnd(List<String> lines, int sectionStart) {
+  for (var index = sectionStart + 1; index < lines.length; index++) {
+    final trimmed = lines[index].trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+String _stripTomlQuotes(String value) {
+  final trimmed = value.trim();
+  if (trimmed.length < 2) {
+    return trimmed;
+  }
+  final quote = trimmed[0];
+  if ((quote != '"' && quote != "'") || trimmed[trimmed.length - 1] != quote) {
+    return trimmed;
+  }
+  return trimmed.substring(1, trimmed.length - 1).replaceAll(r'\"', '"');
+}
+
+String _escapeTomlString(String value) {
+  return value.replaceAll('\\', r'\\').replaceAll('"', r'\"');
+}
+
+String _normalizeEditorContent(String value) {
+  final normalized = value.replaceAll('\r\n', '\n').trimRight();
+  return normalized.isEmpty ? '' : '$normalized\n';
+}
 
 class ConfigPage extends ConsumerStatefulWidget {
   const ConfigPage({super.key});
@@ -77,74 +215,92 @@ class _ConfigPageState extends ConsumerState<ConfigPage> {
 
     return AsyncStateView(
       value: configValue,
-      builder: (workspace) => AppPageScaffold(
-        title: '配置管理',
-        description: '管理全局和项目配置，保存前先查看差异。',
-        child: Column(
-          children: [
-            _ConfigAutoRefresh(
-              paths: workspace.documents
-                  .map((document) => document.path)
-                  .toList(),
-            ),
-            _DocumentStrip(
-              documents: workspace.documents,
-              projectOptions: projectOptions,
-              selectedProject: selectedProject,
-              onSelectProject: (path) {
-                ref.read(selectedConfigProjectPathProvider.notifier).state =
-                    path;
-              },
-              refreshing: _refreshing,
-              onRefresh: _handleRefresh,
-              onEditDocument: (document) => _openDocumentEditor(
-                context: context,
-                ref: ref,
-                document: document,
+      builder: (workspace) {
+        ConfigDocumentData? globalDocument;
+        for (final document in workspace.documents) {
+          if (document.id == 'global') {
+            globalDocument = document;
+            break;
+          }
+        }
+
+        return AppPageScaffold(
+          title: '配置管理',
+          description: '管理全局和项目配置，保存前先查看差异。',
+          child: Column(
+            children: [
+              _ConfigAutoRefresh(
+                paths: workspace.documents
+                    .map((document) => document.path)
+                    .toList(),
               ),
-            ),
-            if (workspace.runtimeSettings case final runtimeSettings?) ...[
-              const SizedBox(height: 18),
-              _RuntimeSettingsPanel(
-                data: runtimeSettings,
-                onEdit: () => _openRuntimeSettingsEditor(
+              _DocumentStrip(
+                documents: workspace.documents,
+                projectOptions: projectOptions,
+                selectedProject: selectedProject,
+                onSelectProject: (path) {
+                  ref.read(selectedConfigProjectPathProvider.notifier).state =
+                      path;
+                },
+                refreshing: _refreshing,
+                onRefresh: _handleRefresh,
+                onEditDocument: (document) => _openDocumentEditor(
                   context: context,
                   ref: ref,
+                  document: document,
+                ),
+              ),
+              if (workspace.runtimeSettings case final runtimeSettings?) ...[
+                const SizedBox(height: 18),
+                _RuntimeSettingsPanel(
                   data: runtimeSettings,
+                  onEdit: () => _openRuntimeSettingsEditor(
+                    context: context,
+                    ref: ref,
+                    data: runtimeSettings,
+                  ),
                 ),
-              ),
-            ],
-            if (workspace.proxySettings case final proxySettings?) ...[
-              const SizedBox(height: 18),
-              _ProxySettingsPanel(
-                data: proxySettings,
-                onEdit: () => _openProxySettingsEditor(
-                  context: context,
-                  ref: ref,
+              ],
+              if (workspace.proxySettings case final proxySettings?) ...[
+                const SizedBox(height: 18),
+                _ProxySettingsPanel(
                   data: proxySettings,
+                  onEdit: () => _openProxySettingsEditor(
+                    context: context,
+                    ref: ref,
+                    data: proxySettings,
+                  ),
                 ),
-              ),
+              ],
+              const SizedBox(height: 18),
+              for (final section in workspace.sections)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 18),
+                  child: _ConfigSection(
+                    section: section,
+                    onEditProxy:
+                        section.title == '运行时设置' &&
+                            workspace.proxySettings != null
+                        ? () => _openProxySettingsEditor(
+                            context: context,
+                            ref: ref,
+                            data: workspace.proxySettings!,
+                          )
+                        : null,
+                    onEditJavaAliases:
+                        section.title == 'Java 别名' && globalDocument != null
+                        ? () => _openJavaAliasesEditor(
+                            context: context,
+                            ref: ref,
+                            document: globalDocument!,
+                          )
+                        : null,
+                  ),
+                ),
             ],
-            const SizedBox(height: 18),
-            for (final section in workspace.sections)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 18),
-                child: _ConfigSection(
-                  section: section,
-                  onEditProxy:
-                      section.title == '运行时设置' &&
-                          workspace.proxySettings != null
-                      ? () => _openProxySettingsEditor(
-                          context: context,
-                          ref: ref,
-                          data: workspace.proxySettings!,
-                        )
-                      : null,
-                ),
-              ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -205,6 +361,25 @@ class _ConfigPageState extends ConsumerState<ConfigPage> {
       final messenger = ScaffoldMessenger.of(context);
       messenger.removeCurrentSnackBar();
       messenger.showSnackBar(const SnackBar(content: Text('代理设置已写回全局配置。')));
+    }
+  }
+
+  Future<void> _openJavaAliasesEditor({
+    required BuildContext context,
+    required WidgetRef ref,
+    required ConfigDocumentData document,
+  }) async {
+    final didSave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => _JavaAliasesEditorDialog(document: document),
+    );
+
+    if (didSave == true && context.mounted) {
+      ref.invalidate(configProvider);
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.removeCurrentSnackBar();
+      messenger.showSnackBar(const SnackBar(content: Text('Java 别名已写回全局配置。')));
     }
   }
 }
@@ -785,10 +960,15 @@ class _ProxySettingTile extends StatelessWidget {
 }
 
 class _ConfigSection extends StatelessWidget {
-  const _ConfigSection({required this.section, this.onEditProxy});
+  const _ConfigSection({
+    required this.section,
+    this.onEditProxy,
+    this.onEditJavaAliases,
+  });
 
   final ConfigSectionData section;
   final VoidCallback? onEditProxy;
+  final VoidCallback? onEditJavaAliases;
 
   @override
   Widget build(BuildContext context) {
@@ -798,18 +978,33 @@ class _ConfigSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Column(
+          Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                section.title,
-                style: Theme.of(context).textTheme.headlineMedium,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      section.title,
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      section.description,
+                      style: TextStyle(color: colors.textMuted, height: 1.55),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                section.description,
-                style: TextStyle(color: colors.textMuted, height: 1.55),
-              ),
+              if (onEditJavaAliases != null) ...[
+                const SizedBox(width: 16),
+                OutlinedButton.icon(
+                  onPressed: onEditJavaAliases,
+                  icon: const Icon(Icons.edit_note_rounded),
+                  label: const Text('配置别名'),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 16),
@@ -865,8 +1060,6 @@ class _ConfigItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = AppTheme.colorsOf(context);
-
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -882,10 +1075,7 @@ class _ConfigItemRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                item.detail,
-                style: TextStyle(color: colors.textMuted, height: 1.5),
-              ),
+              _ConfigItemDetail(item: item),
             ],
           ),
         ),
@@ -928,6 +1118,227 @@ class _ConfigItemRow extends StatelessWidget {
       HealthLevel.critical => colors.danger,
     };
   }
+}
+
+class _ConfigItemDetail extends StatelessWidget {
+  const _ConfigItemDetail({required this.item});
+
+  final ConfigItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.label == '已声明工具' && item.detail.contains(' = ')) {
+      return _ToolDeclarationsPreview(content: item.detail);
+    }
+
+    final colors = AppTheme.colorsOf(context);
+    return Text(
+      item.detail,
+      style: TextStyle(color: colors.textMuted, height: 1.5),
+    );
+  }
+}
+
+class _ToolDeclarationsPreview extends StatelessWidget {
+  const _ToolDeclarationsPreview({required this.content});
+
+  final String content;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final entries = _parseToolDeclarationLines(content);
+
+    if (entries.isEmpty) {
+      return Text(
+        content,
+        style: TextStyle(color: colors.textMuted, height: 1.5),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 1060
+            ? 3
+            : constraints.maxWidth >= 680
+            ? 2
+            : 1;
+        const spacing = 12.0;
+        final itemWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final entry in entries)
+              SizedBox(
+                width: itemWidth,
+                child: _ToolDeclarationCard(entry: entry),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ToolDeclarationCard extends StatelessWidget {
+  const _ToolDeclarationCard({required this.entry});
+
+  final _ToolDeclarationEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final complex = _isComplexToolValue(entry.value);
+    final accent = _toolAccentColor(context, entry.tool);
+
+    return Semantics(
+      label: '${entry.tool} 已声明版本 ${entry.value}',
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 104),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: colors.panelRaised.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: colors.border.withValues(alpha: 0.74)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: accent.withValues(alpha: 0.22)),
+                  ),
+                  child: Icon(_toolIcon(entry.tool), size: 18, color: accent),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    entry.tool,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'FiraCode',
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: complex
+                        ? colors.info.withValues(alpha: 0.1)
+                        : colors.accent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    complex ? '自定义' : '版本',
+                    style: TextStyle(
+                      color: complex ? colors.info : colors.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (complex) ...[
+              Text(
+                '自定义下载源配置',
+                style: TextStyle(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+            ],
+            Text(
+              entry.value,
+              maxLines: complex ? 3 : 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: complex ? colors.textMuted : colors.textPrimary,
+                fontFamily: 'FiraCode',
+                fontSize: complex ? 11 : 22,
+                fontWeight: complex ? FontWeight.w500 : FontWeight.w800,
+                height: complex ? 1.4 : 1.15,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToolDeclarationEntry {
+  const _ToolDeclarationEntry({required this.tool, required this.value});
+
+  final String tool;
+  final String value;
+}
+
+List<_ToolDeclarationEntry> _parseToolDeclarationLines(String content) {
+  final entries = <_ToolDeclarationEntry>[];
+  for (final line in content.split('\n')) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) {
+      continue;
+    }
+    final separatorIndex = trimmed.indexOf(' = ');
+    if (separatorIndex == -1) {
+      continue;
+    }
+    final tool = trimmed.substring(0, separatorIndex).trim();
+    final value = trimmed.substring(separatorIndex + 3).trim();
+    if (tool.isEmpty || value.isEmpty) {
+      continue;
+    }
+    entries.add(_ToolDeclarationEntry(tool: tool, value: value));
+  }
+  return entries;
+}
+
+bool _isComplexToolValue(String value) {
+  return value.length > 48 || value.contains('{') || value.contains('://');
+}
+
+IconData _toolIcon(String tool) {
+  return switch (tool.toLowerCase()) {
+    'flutter' => Icons.flutter_dash_rounded,
+    'java' => Icons.coffee_rounded,
+    'node' || 'npm' || 'pnpm' || 'bun' => Icons.code_rounded,
+    'python' => Icons.terminal_rounded,
+    'go' => Icons.bolt_rounded,
+    'rust' => Icons.memory_rounded,
+    'maven' => Icons.build_rounded,
+    _ => Icons.handyman_rounded,
+  };
+}
+
+Color _toolAccentColor(BuildContext context, String tool) {
+  final colors = AppTheme.colorsOf(context);
+  return switch (tool.toLowerCase()) {
+    'flutter' => colors.info,
+    'java' => colors.warning,
+    'python' => colors.info,
+    'rust' => colors.danger,
+    _ => colors.accent,
+  };
 }
 
 class _ConfigRawPanel extends StatelessWidget {
@@ -2037,6 +2448,366 @@ class _ConfigDocumentEditorDialogState
   }
 
   void _handleContentChanged() {
+    if (!mounted || _preview != null) {
+      return;
+    }
+    setState(() {});
+  }
+}
+
+class _JavaAliasesEditorDialog extends ConsumerStatefulWidget {
+  const _JavaAliasesEditorDialog({required this.document});
+
+  final ConfigDocumentData document;
+
+  @override
+  ConsumerState<_JavaAliasesEditorDialog> createState() =>
+      _JavaAliasesEditorDialogState();
+}
+
+class _JavaAliasesEditorDialogState
+    extends ConsumerState<_JavaAliasesEditorDialog> {
+  late bool _enabled;
+  late final TextEditingController _controller;
+  ConfigSavePreview? _preview;
+  bool _loadingPreview = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final section = _extractTomlSection(
+      widget.document.content,
+      'tool_alias.java.versions',
+    );
+    final aliases = _parseJavaAliasAssignments(section ?? '');
+    _enabled = section != null;
+    _controller = TextEditingController(
+      text: aliases.isEmpty
+          ? _formatJavaAliasAssignments(javaAliasDefaults)
+          : _formatJavaAliasAssignments(aliases),
+    );
+    _controller.addListener(_handleChanged);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_handleChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+    final size = MediaQuery.sizeOf(context);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.all(28),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: size.width * 0.72,
+        constraints: BoxConstraints(
+          maxWidth: 880,
+          maxHeight: size.height * 0.82,
+        ),
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          color: colors.panel,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: colors.borderStrong),
+          boxShadow: [
+            BoxShadow(
+              blurRadius: 28,
+              color: colors.backgroundDeep.withValues(alpha: 0.22),
+              offset: const Offset(0, 16),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _preview == null ? '配置 Java 别名' : '确认保存 Java 别名',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.document.path,
+              style: TextStyle(
+                color: colors.textMuted,
+                fontFamily: 'FiraCode',
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Expanded(
+              child: _preview == null
+                  ? _buildForm(colors)
+                  : _CodePanel(
+                      title: '差异预览',
+                      content: _preview!.diffPreview,
+                      expand: true,
+                    ),
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.end,
+              children: [
+                if (_preview != null)
+                  OutlinedButton.icon(
+                    onPressed: _saving
+                        ? null
+                        : () {
+                            setState(() {
+                              _preview = null;
+                            });
+                          },
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    label: const Text('返回编辑'),
+                  ),
+                OutlinedButton(
+                  onPressed: _loadingPreview || _saving
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                if (_preview == null)
+                  FilledButton(
+                    onPressed: _loadingPreview || !_hasChanges
+                        ? null
+                        : _generatePreview,
+                    child: Text(_loadingPreview ? '预览中...' : '预览变更'),
+                  ),
+                if (_preview != null)
+                  FilledButton(
+                    onPressed: _saving ? null : _saveAliases,
+                    child: Text(_saving ? '保存中...' : '保存别名'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildForm(AppPalette colors) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          value: _enabled,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('启用 Java 默认别名'),
+          subtitle: Text(
+            '关闭时不会写入 [tool_alias.java.versions]；打开后可以编辑具体映射。',
+            style: TextStyle(color: colors.textMuted, height: 1.4),
+          ),
+          onChanged: (value) {
+            setState(() {
+              _enabled = value;
+              _preview = null;
+              if (value && _controller.text.trim().isEmpty) {
+                _controller.text = _formatJavaAliasAssignments(
+                  javaAliasDefaults,
+                );
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '每行一个映射，例如 21 = "corretto-21"。',
+                style: TextStyle(color: colors.textMuted, height: 1.45),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: !_enabled
+                  ? null
+                  : () {
+                      setState(() {
+                        _controller.text = _formatJavaAliasAssignments(
+                          javaAliasDefaults,
+                        );
+                        _preview = null;
+                      });
+                    },
+              icon: const Icon(Icons.restart_alt_rounded),
+              label: const Text('重置默认值'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Expanded(
+          child: Opacity(
+            opacity: _enabled ? 1 : 0.55,
+            child: Container(
+              decoration: BoxDecoration(
+                color: colors.backgroundSoft,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: colors.border),
+              ),
+              child: TextField(
+                enabled: _enabled,
+                controller: _controller,
+                maxLines: null,
+                expands: true,
+                textAlignVertical: TextAlignVertical.top,
+                autocorrect: false,
+                enableSuggestions: false,
+                style: const TextStyle(
+                  fontFamily: 'FiraCode',
+                  fontSize: 13,
+                  height: 1.55,
+                ),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.all(16),
+                  hintText: '21 = "corretto-21"',
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _generatePreview() async {
+    final aliases = _collectAliases();
+    if (aliases == null) {
+      return;
+    }
+
+    setState(() {
+      _loadingPreview = true;
+    });
+
+    try {
+      final nextContent = buildJavaAliasesConfigContent(
+        currentContent: widget.document.content,
+        enabled: _enabled,
+        aliases: aliases,
+      );
+      final preview = await ref
+          .read(configRepositoryProvider)
+          .previewSave(document: widget.document, nextContent: nextContent);
+      if (!mounted) {
+        return;
+      }
+      if (!preview.hasChanges) {
+        _showFeedback('没有变更，无需预览。');
+        return;
+      }
+      setState(() {
+        _preview = preview;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingPreview = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveAliases() async {
+    final preview = _preview;
+    if (preview == null || !preview.hasChanges || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+    });
+
+    try {
+      final stopwatch = Stopwatch()..start();
+      await ref
+          .read(configRepositoryProvider)
+          .saveDocument(
+            document: preview.document,
+            nextContent: preview.nextContent,
+          );
+      stopwatch.stop();
+      await ref
+          .read(historyServiceProvider)
+          .appendEntry(
+            HistoryEntry(
+              command: preview.commandPreview,
+              timestamp: _formatNow(),
+              detail: _enabled ? '已启用并写回 Java 别名。' : '已关闭 Java 别名配置。',
+              level: HealthLevel.info,
+              status: HistoryStatus.success,
+              exitCode: 0,
+              durationMs: stopwatch.elapsedMilliseconds,
+              stdout: preview.document.path,
+              stdoutSnippet: preview.document.path,
+            ),
+          );
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  Map<String, String>? _collectAliases() {
+    if (!_enabled) {
+      return const {};
+    }
+
+    final aliases = _parseJavaAliasAssignments(_controller.text);
+    if (aliases.isEmpty) {
+      _showFeedback('启用后至少需要保留一个 Java 别名。');
+      return null;
+    }
+
+    return aliases;
+  }
+
+  bool get _hasChanges {
+    final aliases = _enabled
+        ? _parseJavaAliasAssignments(_controller.text)
+        : const <String, String>{};
+    final nextContent = buildJavaAliasesConfigContent(
+      currentContent: widget.document.content,
+      enabled: _enabled,
+      aliases: aliases,
+    );
+    return _normalizeEditorContent(nextContent) !=
+        _normalizeEditorContent(widget.document.content);
+  }
+
+  String _formatNow() {
+    final now = DateTime.now();
+    final hours = now.hour.toString().padLeft(2, '0');
+    final minutes = now.minute.toString().padLeft(2, '0');
+    return '$hours:$minutes';
+  }
+
+  void _showFeedback(String message) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _handleChanged() {
     if (!mounted || _preview != null) {
       return;
     }

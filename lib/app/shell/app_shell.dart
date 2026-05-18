@@ -815,8 +815,8 @@ class _MissingMiseExperienceState
 
         return SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(28, 28, 34, 28),
-          child: SizedBox(
-            height: targetHeight,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: targetHeight),
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.all(28),
@@ -836,6 +836,8 @@ class _MissingMiseExperienceState
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final stacked = constraints.maxWidth < 1040;
+                  final showFooterBand =
+                      viewport.maxHeight >= 820 && constraints.maxWidth >= 760;
                   final hero = _MissingHeroText(platformLabel: platformLabel);
                   final commandCard = _InstallCommandCard(
                     installCommand: installCommand,
@@ -861,8 +863,10 @@ class _MissingMiseExperienceState
                         hero,
                         const SizedBox(height: 24),
                         commandCard,
-                        const SizedBox(height: 24),
-                        const _MissingMiseFooterBand(),
+                        if (showFooterBand) ...[
+                          const SizedBox(height: 24),
+                          const _MissingMiseFooterBand(),
+                        ],
                       ],
                     );
                   }
@@ -884,8 +888,10 @@ class _MissingMiseExperienceState
                           ),
                         ],
                       ),
-                      const Spacer(),
-                      const _MissingMiseFooterBand(),
+                      if (showFooterBand) ...[
+                        const SizedBox(height: 28),
+                        const _MissingMiseFooterBand(),
+                      ],
                     ],
                   );
                 },

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mise_gui/services/mise_process_service.dart';
 import 'package:mise_gui/services/mise_query_service.dart';
@@ -87,5 +89,14 @@ void main() {
     );
 
     expect(resolved.resolvedPath, '/Users/demo/.local/share/mise/shims/node');
+  });
+
+  test('prefers utf8 for Windows command output', () {
+    const output = '找不到与输入条件匹配的已安装程序包。';
+
+    expect(
+      decodeMiseProcessOutput(utf8.encode(output), preferUtf8: true),
+      output,
+    );
   });
 }

@@ -156,31 +156,19 @@ class LocalMiseSystemCommandRunner implements MiseSystemCommandRunner {
       );
     }
 
-    final stdoutBuffer = StringBuffer();
-    final stderrBuffer = StringBuffer();
+    final stdoutCollector = MiseProcessOutputCollector(
+      source: MiseCommandOutputSource.stdout,
+      onOutput: onOutput,
+    );
+    final stderrCollector = MiseProcessOutputCollector(
+      source: MiseCommandOutputSource.stderr,
+      onOutput: onOutput,
+    );
     final stdoutFuture = process.stdout
-        .transform(systemEncoding.decoder)
-        .listen((chunk) {
-          stdoutBuffer.write(chunk);
-          onOutput?.call(
-            MiseCommandOutputChunk(
-              source: MiseCommandOutputSource.stdout,
-              text: chunk,
-            ),
-          );
-        })
+        .listen(stdoutCollector.add)
         .asFuture<void>();
     final stderrFuture = process.stderr
-        .transform(systemEncoding.decoder)
-        .listen((chunk) {
-          stderrBuffer.write(chunk);
-          onOutput?.call(
-            MiseCommandOutputChunk(
-              source: MiseCommandOutputSource.stderr,
-              text: chunk,
-            ),
-          );
-        })
+        .listen(stderrCollector.add)
         .asFuture<void>();
 
     int exitCode;
@@ -197,9 +185,9 @@ class LocalMiseSystemCommandRunner implements MiseSystemCommandRunner {
     await stderrFuture;
     stopwatch.stop();
 
-    final stderr = stderrBuffer.toString();
+    final stderr = stderrCollector.toText();
     return MiseSystemCommandResult(
-      stdout: stdoutBuffer.toString(),
+      stdout: stdoutCollector.toText(),
       stderr: timedOut
           ? [
               stderr.trim(),

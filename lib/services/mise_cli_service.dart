@@ -389,7 +389,7 @@ class LiveMiseCliService implements MiseCliService {
         notice: InlineNotice(
           title: '${_toolName(tool)} 远端目录暂时不可用',
           message: fallbackLatestVersion == null
-              ? '已回退到本地已安装版本视图，当前激活版本和来源信息仍然可靠。稍后可以重新同步，或先查看实际 CLI 命令。'
+              ? '已回退到本地已安装版本视图，当前激活版本和来源信息仍然可靠。可以稍后重试同步远端版本。'
               : '直接远端列表暂时不可用，已改用 mise outdated 兜底当前版本线的最新稳定版。',
           level: HealthLevel.warning,
           commandPreview: 'mise ls-remote --json $tool\n$error',
@@ -538,42 +538,84 @@ class LiveMiseCliService implements MiseCliService {
   }) {
     final normalizedRequested = requestedVersion.trim();
     final requestedMajor = _leadingMajor(normalizedRequested);
+    final scopedVersions = _filterRemoteCandidateScope(
+      tool: tool,
+      requestedMajor: requestedMajor,
+      versions: versions,
+    ).toList();
 
-    Iterable<MiseRemoteToolVersionRef> candidates = versions.where(
-      (version) => !version.rolling,
-    );
+    final upgradeCandidates =
+        scopedVersions
+            .where(
+              (version) =>
+                  compareToolVersions(version.version, activeVersion) > 0,
+            )
+            .toList()
+          ..sort(
+            (left, right) => compareToolVersions(left.version, right.version),
+          );
+
+    if (upgradeCandidates.isNotEmpty) {
+      return _latestRemoteCandidates(upgradeCandidates);
+    }
+
+    final installableCandidates =
+        scopedVersions
+            .where((version) => version.version != activeVersion)
+            .toList()
+          ..sort(
+            (left, right) => compareToolVersions(left.version, right.version),
+          );
+
+    return _latestRemoteCandidates(installableCandidates);
+  }
+
+  Iterable<MiseRemoteToolVersionRef> _filterRemoteCandidateScope({
+    required String tool,
+    required String? requestedMajor,
+    required List<MiseRemoteToolVersionRef> versions,
+  }) {
+    final nonRolling = versions.where((version) => !version.rolling);
 
     if (tool == 'java' && requestedMajor != null) {
-      candidates = candidates.where(
+      return nonRolling.where(
         (version) =>
             _leadingMajor(version.version) == requestedMajor &&
-            compareToolVersions(version.version, activeVersion) > 0,
-      );
-    } else if (tool == 'flutter') {
-      candidates = candidates.where(
-        (version) =>
-            version.version.contains('stable') &&
-            compareToolVersions(version.version, activeVersion) > 0,
-      );
-    } else if (requestedMajor != null) {
-      candidates = candidates.where(
-        (version) =>
-            version.version.startsWith('$requestedMajor.') &&
-            compareToolVersions(version.version, activeVersion) > 0,
-      );
-    } else {
-      candidates = candidates.where(
-        (version) => compareToolVersions(version.version, activeVersion) > 0,
+            !_isJavaRuntimeOnlyVersion(version.version),
       );
     }
 
-    final list = candidates.toList()
-      ..sort((left, right) => compareToolVersions(left.version, right.version));
-    if (list.isEmpty) {
+    if (tool == 'flutter') {
+      final stableVersions = nonRolling
+          .where((version) => version.version.contains('stable'))
+          .toList();
+      return stableVersions.isNotEmpty ? stableVersions : nonRolling;
+    }
+
+    if (requestedMajor != null) {
+      return nonRolling.where(
+        (version) => version.version.startsWith('$requestedMajor.'),
+      );
+    }
+
+    return nonRolling;
+  }
+
+  bool _isJavaRuntimeOnlyVersion(String version) {
+    final normalized = version.toLowerCase();
+    return normalized.contains('-jre') || normalized.contains('+jre');
+  }
+
+  List<MiseRemoteToolVersionRef> _latestRemoteCandidates(
+    List<MiseRemoteToolVersionRef> sortedVersions,
+  ) {
+    if (sortedVersions.isEmpty) {
       return const [];
     }
 
-    final tail = list.length <= 4 ? list : list.sublist(list.length - 4);
+    final tail = sortedVersions.length <= 4
+        ? sortedVersions
+        : sortedVersions.sublist(sortedVersions.length - 4);
     return tail.reversed.toList();
   }
 
@@ -593,9 +635,9 @@ class LiveMiseCliService implements MiseCliService {
       return null;
     }
 
-    return remoteVersions.first.version == activeVersion
-        ? null
-        : remoteVersions.first.version;
+    return compareToolVersions(remoteVersions.first.version, activeVersion) > 0
+        ? remoteVersions.first.version
+        : null;
   }
 
   List<ToolProjectImpact> _buildProjectImpacts(

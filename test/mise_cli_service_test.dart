@@ -117,6 +117,16 @@ class _JavaRemoteQueryService extends _FakeQueryService {
       MiseRemoteToolVersionRef(tool: 'java', version: '21.0.2', rolling: false),
       MiseRemoteToolVersionRef(
         tool: 'java',
+        version: 'temurin-21.0.11+9.0.LTS-jre',
+        rolling: false,
+      ),
+      MiseRemoteToolVersionRef(
+        tool: 'java',
+        version: 'zulu-21.44.17-jre',
+        rolling: false,
+      ),
+      MiseRemoteToolVersionRef(
+        tool: 'java',
         version: 'temurin-21.0.11+9.0.LTS',
         rolling: false,
       ),
@@ -126,6 +136,54 @@ class _JavaRemoteQueryService extends _FakeQueryService {
         rolling: false,
       ),
     ];
+  }
+}
+
+class _InstalledLatestRemoteQueryService extends _FakeQueryService {
+  const _InstalledLatestRemoteQueryService();
+
+  @override
+  Future<List<MiseRemoteToolVersionRef>> fetchRemoteVersions(
+    String tool, {
+    String? workingDirectory,
+  }) async {
+    return switch (tool) {
+      'maven' => const [
+        MiseRemoteToolVersionRef(
+          tool: 'maven',
+          version: '3.9.9',
+          rolling: false,
+        ),
+        MiseRemoteToolVersionRef(
+          tool: 'maven',
+          version: '3.9.10',
+          rolling: false,
+        ),
+        MiseRemoteToolVersionRef(
+          tool: 'maven',
+          version: '3.9.11',
+          rolling: false,
+        ),
+      ],
+      'flutter' => const [
+        MiseRemoteToolVersionRef(
+          tool: 'flutter',
+          version: '3.32.8',
+          rolling: false,
+        ),
+        MiseRemoteToolVersionRef(
+          tool: 'flutter',
+          version: '3.35.5',
+          rolling: false,
+        ),
+        MiseRemoteToolVersionRef(
+          tool: 'flutter',
+          version: '3.35.6',
+          rolling: false,
+        ),
+      ],
+      _ => const [],
+    };
   }
 }
 
@@ -199,6 +257,10 @@ void main() {
         hydrated.remoteVersions.map((version) => version.version).first,
         'temurin-21.0.11+9.0.LTS',
       );
+      expect(
+        hydrated.remoteVersions.map((version) => version.version),
+        isNot(anyElement(contains('jre'))),
+      );
     },
   );
 
@@ -254,6 +316,88 @@ void main() {
           (notice) => notice.commandPreview?.contains(r'mise\shims') ?? false,
         ),
         isTrue,
+      );
+    },
+  );
+
+  test(
+    'keeps installable remote versions visible when maven is already latest',
+    () async {
+      const service = LiveMiseCliService(
+        queryService: _InstalledLatestRemoteQueryService(),
+        processService: _FakeProcessService(
+          ShellEnvironmentLoadResult(source: ShellEnvironmentSource.shell),
+        ),
+      );
+
+      const tool = ToolRecord(
+        id: 'maven',
+        name: 'Maven',
+        category: '构建工具',
+        description: 'Maven build tool',
+        activeVersion: '3.9.11',
+        requestedVersion: '3.9.11',
+        source: '全局',
+        strategy: 'global',
+        latestStableVersion: '待同步',
+        latestPreviewVersion: '待同步',
+        installedVersions: [],
+        remoteVersions: [],
+        projectImpacts: [],
+        quickActions: [],
+        commandPreview: 'mise current maven',
+        level: HealthLevel.info,
+        remoteState: ToolRemoteState.pending,
+      );
+
+      final hydrated = await service.hydrateToolRemoteState(tool);
+
+      expect(hydrated.updateVersion, isNull);
+      expect(hydrated.remoteState, ToolRemoteState.ready);
+      expect(
+        hydrated.remoteVersions.map((version) => version.version),
+        containsAll(<String>['3.9.10', '3.9.9']),
+      );
+    },
+  );
+
+  test(
+    'keeps flutter remote versions visible when remote output lacks stable suffixes',
+    () async {
+      const service = LiveMiseCliService(
+        queryService: _InstalledLatestRemoteQueryService(),
+        processService: _FakeProcessService(
+          ShellEnvironmentLoadResult(source: ShellEnvironmentSource.shell),
+        ),
+      );
+
+      const tool = ToolRecord(
+        id: 'flutter',
+        name: 'Flutter',
+        category: '移动端 SDK',
+        description: 'Flutter SDK',
+        activeVersion: '3.35.6',
+        requestedVersion: '3.35.6',
+        source: '项目',
+        strategy: 'project',
+        latestStableVersion: '待同步',
+        latestPreviewVersion: '待同步',
+        installedVersions: [],
+        remoteVersions: [],
+        projectImpacts: [],
+        quickActions: [],
+        commandPreview: 'mise current flutter',
+        level: HealthLevel.info,
+        remoteState: ToolRemoteState.pending,
+      );
+
+      final hydrated = await service.hydrateToolRemoteState(tool);
+
+      expect(hydrated.updateVersion, isNull);
+      expect(hydrated.remoteState, ToolRemoteState.ready);
+      expect(
+        hydrated.remoteVersions.map((version) => version.version),
+        containsAll(<String>['3.35.5', '3.32.8']),
       );
     },
   );

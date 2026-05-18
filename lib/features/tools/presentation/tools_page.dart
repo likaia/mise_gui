@@ -21,7 +21,14 @@ import 'package:mise_gui/shared/ui/history_entry_dialog.dart';
 import 'package:mise_gui/shared/ui/inline_notice_bar.dart';
 
 List<String> selectVersionSuggestions(List<MiseRemoteToolVersionRef> versions) {
-  final stableVersions = versions.where((version) => !version.rolling).toList();
+  final stableVersions = versions
+      .where(
+        (version) =>
+            !version.rolling &&
+            !(version.tool == 'java' &&
+                _isJavaRuntimeOnlySuggestion(version.version)),
+      )
+      .toList();
   final source = stableVersions.isNotEmpty ? stableVersions : versions;
   if (source.isEmpty) {
     return const [];
@@ -51,6 +58,11 @@ String _majorVersionKey(String input) {
   return match?.group(1) ?? input;
 }
 
+bool _isJavaRuntimeOnlySuggestion(String version) {
+  final normalized = version.toLowerCase();
+  return normalized.contains('-jre') || normalized.contains('+jre');
+}
+
 class ToolsPage extends ConsumerStatefulWidget {
   const ToolsPage({super.key});
 
@@ -62,6 +74,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
   String? _selectedToolId;
   final Set<String> _requestedToolIds = <String>{};
   final Set<String> _loadingToolIds = <String>{};
+  final Set<String> _failedToolIds = <String>{};
   final Map<String, ToolRecord> _hydratedTools = <String, ToolRecord>{};
   var _refreshing = false;
 
@@ -85,6 +98,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
     setState(() {
       _requestedToolIds.add(toolId);
       _loadingToolIds.add(toolId);
+      _failedToolIds.remove(toolId);
     });
 
     try {
@@ -96,6 +110,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
       }
       setState(() {
         _hydratedTools[toolId] = detail;
+        _failedToolIds.remove(toolId);
       });
     } catch (error) {
       _showFeedback('读取版本详情失败，请稍后重试。');
@@ -103,7 +118,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
         return;
       }
       setState(() {
-        _requestedToolIds.remove(toolId);
+        _failedToolIds.add(toolId);
       });
     } finally {
       if (mounted) {
@@ -125,6 +140,7 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
       _hydratedTools.clear();
       _requestedToolIds.clear();
       _loadingToolIds.clear();
+      _failedToolIds.clear();
     });
 
     try {
@@ -183,7 +199,9 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
             hydratedTools: _hydratedTools,
             loadingToolIds: _loadingToolIds,
             requestedToolIds: _requestedToolIds,
+            failedToolIds: _failedToolIds,
             onSelected: _selectTool,
+            onRetryDetail: _retryToolDetail,
             onOpenPreview: _openToolActionPreview,
           ),
         );
@@ -204,9 +222,15 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
       _requestedToolIds.add(id);
     });
 
-    if (!_loadingToolIds.contains(id) && !_hydratedTools.containsKey(id)) {
+    if (!_loadingToolIds.contains(id) &&
+        !_hydratedTools.containsKey(id) &&
+        !_failedToolIds.contains(id)) {
       unawaited(_loadToolDetail(id));
     }
+  }
+
+  void _retryToolDetail(String id) {
+    unawaited(_loadToolDetail(id, forceRefresh: true));
   }
 
   Future<void> _openInstallToolFlow(BuildContext context) async {
@@ -322,11 +346,13 @@ class _ToolsPageState extends ConsumerState<ToolsPage> {
               _hydratedTools.clear();
               _requestedToolIds.clear();
               _loadingToolIds.clear();
+              _failedToolIds.clear();
             } else {
               for (final toolId in affectedToolIds) {
                 _hydratedTools.remove(toolId);
                 _requestedToolIds.remove(toolId);
                 _loadingToolIds.remove(toolId);
+                _failedToolIds.remove(toolId);
               }
             }
           });
@@ -813,6 +839,60 @@ class _ToolWorkspaceLoading extends StatelessWidget {
   }
 }
 
+class _ToolWorkspaceError extends StatelessWidget {
+  const _ToolWorkspaceError({required this.toolName, required this.onRetry});
+
+  final String toolName;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colorsOf(context);
+
+    return AppPanel(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: colors.warning.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: colors.warning.withValues(alpha: 0.24)),
+            ),
+            child: Icon(Icons.refresh_rounded, color: colors.warning, size: 21),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$toolName 详情读取失败',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '可能是远端版本同步暂时不可用，或者当前网络无法访问 mise 数据源。',
+                  style: TextStyle(color: colors.textMuted, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          OutlinedButton.icon(
+            key: ValueKey('retry-tool-detail-$toolName'),
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _InstallToolRequest {
   const _InstallToolRequest({required this.tool, required this.version});
 
@@ -1184,7 +1264,9 @@ class _ToolList extends StatelessWidget {
     required this.hydratedTools,
     required this.loadingToolIds,
     required this.requestedToolIds,
+    required this.failedToolIds,
     required this.onSelected,
+    required this.onRetryDetail,
     required this.onOpenPreview,
   });
 
@@ -1193,7 +1275,9 @@ class _ToolList extends StatelessWidget {
   final Map<String, ToolRecord> hydratedTools;
   final Set<String> loadingToolIds;
   final Set<String> requestedToolIds;
+  final Set<String> failedToolIds;
   final ValueChanged<String> onSelected;
+  final ValueChanged<String> onRetryDetail;
   final Future<void> Function(
     BuildContext context,
     ActionPreviewDialogData data,
@@ -1226,7 +1310,9 @@ class _ToolList extends StatelessWidget {
                   expanded: tool.id == selectedToolId,
                   detailLoading: loadingToolIds.contains(tool.id),
                   detailRequested: requestedToolIds.contains(tool.id),
+                  detailFailed: failedToolIds.contains(tool.id),
                   onTap: () => onSelected(tool.id),
+                  onRetryDetail: () => onRetryDetail(tool.id),
                   onOpenPreview: onOpenPreview,
                 ),
               ),
@@ -1244,7 +1330,9 @@ class _ToolAccordionItem extends StatelessWidget {
     required this.expanded,
     required this.detailLoading,
     required this.detailRequested,
+    required this.detailFailed,
     required this.onTap,
+    required this.onRetryDetail,
     required this.onOpenPreview,
   });
 
@@ -1253,7 +1341,9 @@ class _ToolAccordionItem extends StatelessWidget {
   final bool expanded;
   final bool detailLoading;
   final bool detailRequested;
+  final bool detailFailed;
   final VoidCallback onTap;
+  final VoidCallback onRetryDetail;
   final Future<void> Function(
     BuildContext context,
     ActionPreviewDialogData data,
@@ -1272,6 +1362,7 @@ class _ToolAccordionItem extends StatelessWidget {
           selected: expanded,
           detailLoading: detailLoading,
           detailRequested: detailRequested,
+          detailFailed: detailFailed,
           onTap: onTap,
         ),
         AnimatedSwitcher(
@@ -1308,12 +1399,25 @@ class _ToolAccordionItem extends StatelessWidget {
 
     final detailTool = hydratedTool;
     if (detailTool == null) {
+      if (detailFailed) {
+        return _AccordionDetailShell(
+          key: ValueKey('failed-detail-${tool.id}'),
+          child: _ToolWorkspaceError(
+            toolName: tool.name,
+            onRetry: onRetryDetail,
+          ),
+        );
+      }
       return const SizedBox.shrink(key: ValueKey('empty-detail'));
     }
 
     return _AccordionDetailShell(
       key: ValueKey('ready-detail-${tool.id}-${detailTool.activeVersion}'),
-      child: _ToolWorkspace(tool: detailTool, onOpenPreview: onOpenPreview),
+      child: _ToolWorkspace(
+        tool: detailTool,
+        onRetryDetail: onRetryDetail,
+        onOpenPreview: onOpenPreview,
+      ),
     );
   }
 }
@@ -1338,6 +1442,7 @@ class _ToolListItem extends StatelessWidget {
     required this.selected,
     required this.detailLoading,
     required this.detailRequested,
+    required this.detailFailed,
     required this.onTap,
   });
 
@@ -1345,6 +1450,7 @@ class _ToolListItem extends StatelessWidget {
   final bool selected;
   final bool detailLoading;
   final bool detailRequested;
+  final bool detailFailed;
   final VoidCallback onTap;
 
   @override
@@ -1356,11 +1462,13 @@ class _ToolListItem extends StatelessWidget {
     final latestValue = switch ((
       detailLoading,
       detailRequested,
+      detailFailed,
       tool.remoteState,
     )) {
-      (true, _, _) => '加载中...',
-      (false, false, _) => '点击查看',
-      (false, true, ToolRemoteState.unavailable) => '未获取',
+      (true, _, _, _) => '加载中...',
+      (false, _, true, _) => '读取失败',
+      (false, false, _, _) => '点击查看',
+      (false, true, _, ToolRemoteState.unavailable) => '未获取',
       _ => tool.latestStableVersion,
     };
 
@@ -1414,9 +1522,14 @@ class _ToolListItem extends StatelessWidget {
 }
 
 class _ToolWorkspace extends StatelessWidget {
-  const _ToolWorkspace({required this.tool, required this.onOpenPreview});
+  const _ToolWorkspace({
+    required this.tool,
+    required this.onRetryDetail,
+    required this.onOpenPreview,
+  });
 
   final ToolRecord tool;
+  final VoidCallback onRetryDetail;
   final Future<void> Function(
     BuildContext context,
     ActionPreviewDialogData data,
@@ -1428,7 +1541,11 @@ class _ToolWorkspace extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _ToolHeroPanel(tool: tool, onOpenPreview: onOpenPreview),
+        _ToolHeroPanel(
+          tool: tool,
+          onRetryDetail: onRetryDetail,
+          onOpenPreview: onOpenPreview,
+        ),
         const SizedBox(height: 18),
         _VersionInventoryPanel(
           title: '本机版本',
@@ -1467,9 +1584,14 @@ class _ToolWorkspace extends StatelessWidget {
 }
 
 class _ToolHeroPanel extends StatelessWidget {
-  const _ToolHeroPanel({required this.tool, required this.onOpenPreview});
+  const _ToolHeroPanel({
+    required this.tool,
+    required this.onRetryDetail,
+    required this.onOpenPreview,
+  });
 
   final ToolRecord tool;
+  final VoidCallback onRetryDetail;
   final Future<void> Function(
     BuildContext context,
     ActionPreviewDialogData data,
@@ -1589,17 +1711,13 @@ class _ToolHeroPanel extends StatelessWidget {
                 for (final notice in tool.notices) ...[
                   InlineNoticeBar(
                     notice: notice,
-                    onShowCommand: notice.commandPreview == null
-                        ? null
-                        : () => onOpenPreview(
-                            context,
-                            ActionPreviewDialogData(
-                              title: notice.title,
-                              summary: notice.message,
-                              command: notice.commandPreview!,
-                              level: notice.level,
-                            ),
-                          ),
+                    actionLabel: _canRetryRemoteNotice(notice) ? '重试' : null,
+                    actionIcon: _canRetryRemoteNotice(notice)
+                        ? Icons.refresh_rounded
+                        : null,
+                    onAction: _canRetryRemoteNotice(notice)
+                        ? onRetryDetail
+                        : null,
                   ),
                   if (notice != tool.notices.last) const SizedBox(height: 12),
                 ],
@@ -1609,6 +1727,11 @@ class _ToolHeroPanel extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  bool _canRetryRemoteNotice(InlineNotice notice) {
+    return tool.remoteState == ToolRemoteState.unavailable &&
+        notice.title.contains('远端目录暂时不可用');
   }
 
   ToolVersionRecord? _recommendedVersion(ToolRecord tool) {
@@ -1676,7 +1799,7 @@ class _VersionInventoryPanel extends StatelessWidget {
                   const _PanelEmptyStateData(
                     icon: Icons.info_outline_rounded,
                     title: '当前没有可展示的数据',
-                    message: '稍后可以重新同步，或先查看命令结果。',
+                    message: '稍后可以重新同步，或先使用当前本机版本继续操作。',
                     level: HealthLevel.info,
                   ),
               onOpenPreview: onOpenPreview,
@@ -1907,19 +2030,6 @@ class _VersionActions extends StatelessWidget {
             icon: const Icon(Icons.delete_outline_rounded, size: 18),
             label: const Text('卸载'),
           ),
-        IconButton(
-          tooltip: '查看命令',
-          onPressed: () => onOpenPreview(
-            context,
-            ActionPreviewDialogData(
-              title: '命令预览',
-              summary: '这条命令是当前界面为这个版本动作准备的实际 CLI。',
-              command: version.commandPreview,
-              level: version.level,
-            ),
-          ),
-          icon: const Icon(Icons.terminal_rounded),
-        ),
       ],
     );
   }

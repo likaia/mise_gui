@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 const String _shellEnvironmentStartMarker =
     '__MISE_GUI_SHELL_ENVIRONMENT_START__';
@@ -39,6 +41,57 @@ class MiseCommandOutputChunk {
 
   final MiseCommandOutputSource source;
   final String text;
+}
+
+class MiseProcessOutputCollector {
+  MiseProcessOutputCollector({required this.source, this.onOutput});
+
+  final MiseCommandOutputSource source;
+  final void Function(MiseCommandOutputChunk chunk)? onOutput;
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
+
+  void add(List<int> chunk) {
+    if (chunk.isEmpty) {
+      return;
+    }
+    _bytes.add(chunk);
+
+    final text = decodeMiseProcessOutput(chunk);
+    if (text.isEmpty) {
+      return;
+    }
+    onOutput?.call(MiseCommandOutputChunk(source: source, text: text));
+  }
+
+  String toText() => decodeMiseProcessOutput(_bytes.toBytes());
+}
+
+String decodeMiseProcessOutput(List<int> bytes, {bool? preferUtf8}) {
+  if (bytes.isEmpty) {
+    return '';
+  }
+
+  final useUtf8First = preferUtf8 ?? Platform.isWindows;
+  final encodings = useUtf8First
+      ? <Encoding>[utf8, systemEncoding]
+      : <Encoding>[systemEncoding, utf8];
+
+  for (final encoding in encodings) {
+    try {
+      return _decodeStrict(encoding, bytes);
+    } on FormatException {
+      continue;
+    }
+  }
+
+  return utf8.decode(bytes, allowMalformed: true);
+}
+
+String _decodeStrict(Encoding encoding, List<int> bytes) {
+  if (encoding == utf8) {
+    return const Utf8Decoder(allowMalformed: false).convert(bytes);
+  }
+  return encoding.decode(bytes);
 }
 
 class MiseCommandResult {
@@ -343,31 +396,19 @@ class LocalMiseProcessService implements MiseProcessService {
       includeParentEnvironment: true,
       runInShell: false,
     );
-    final stdoutBuffer = StringBuffer();
-    final stderrBuffer = StringBuffer();
+    final stdoutCollector = MiseProcessOutputCollector(
+      source: MiseCommandOutputSource.stdout,
+      onOutput: onOutput,
+    );
+    final stderrCollector = MiseProcessOutputCollector(
+      source: MiseCommandOutputSource.stderr,
+      onOutput: onOutput,
+    );
     final stdoutFuture = process.stdout
-        .transform(systemEncoding.decoder)
-        .listen((chunk) {
-          stdoutBuffer.write(chunk);
-          onOutput?.call(
-            MiseCommandOutputChunk(
-              source: MiseCommandOutputSource.stdout,
-              text: chunk,
-            ),
-          );
-        })
+        .listen(stdoutCollector.add)
         .asFuture<void>();
     final stderrFuture = process.stderr
-        .transform(systemEncoding.decoder)
-        .listen((chunk) {
-          stderrBuffer.write(chunk);
-          onOutput?.call(
-            MiseCommandOutputChunk(
-              source: MiseCommandOutputSource.stderr,
-              text: chunk,
-            ),
-          );
-        })
+        .listen(stderrCollector.add)
         .asFuture<void>();
 
     int exitCode;
@@ -397,8 +438,8 @@ class LocalMiseProcessService implements MiseProcessService {
 
     await stdoutFuture;
     await stderrFuture;
-    final stdout = stdoutBuffer.toString();
-    final stderr = stderrBuffer.toString();
+    final stdout = stdoutCollector.toText();
+    final stderr = stderrCollector.toText();
     if (!timedOut) {
       return ProcessResult(process.pid, exitCode, stdout, stderr);
     }
